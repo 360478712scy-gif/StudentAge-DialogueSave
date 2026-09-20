@@ -1,0 +1,27 @@
+# Local game copies, saves, research and generated verification evidence
+/qa/
+/research/
+/dist/
+/tests/StorageSandbox/
+**/bin/
+**/obj/
+**/__pycache__/
+*.py[cod]
+*.log
+*.dll
+*.exe
+*.pdb
+*.save
+*.dsav
+*.bak
+*.zip
+*.user
+*.suo
+.DS_Store
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+.venv/
+venv/
