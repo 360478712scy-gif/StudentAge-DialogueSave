@@ -11,8 +11,8 @@ using UnityEngine;
 using StudentAgeDialogueSave.GameIntegration;
 using StudentAgeDialogueSave.UI;
 
-[assembly: AssemblyVersion("0.1.0.0")]
-[assembly: AssemblyFileVersion("0.1.0.0")]
+[assembly: AssemblyVersion("0.1.1.0")]
+[assembly: AssemblyFileVersion("0.1.1.0")]
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("DialogueRuntimeQA")]
 
 namespace StudentAgeDialogueSave
@@ -21,7 +21,7 @@ namespace StudentAgeDialogueSave
     public sealed class DialogueSavePlugin : BaseUnityPlugin
     {
         public const string Id = "local.studentage.dialoguesave";
-        public const string Version = "0.1.0";
+        public const string Version = "0.1.5";
         internal static DialogueRuntimeHost Host;
         void Awake()
         {
@@ -62,6 +62,7 @@ namespace StudentAgeDialogueSave
         DialogueSaveService service;
         DialogueUiController ui;
         AdvDialogueController adv;
+        DialogueExitSave exitSave;
         int ownerThread;
         bool disposed;
         float nextAutoCheck;
@@ -72,8 +73,11 @@ namespace StudentAgeDialogueSave
             log = logger; ownerThread = Thread.CurrentThread.ManagedThreadId;
             harmony = new Harmony(DialogueSavePlugin.Id);
             adapter = new DialogueCheckpointAdapter(NextFrame, message => log.LogInfo(message));
+            DialoguePresentationPolicy.Install(harmony);
             adapter.Install(harmony);
             service = new DialogueSaveService(adapter, Post, message => log.LogInfo(message), NextFrame, shutdown.Token, auto, interval);
+            ComicPresentationAdapter.Install(harmony);
+            exitSave = new DialogueExitSave(service, NextFrame, message => log.LogInfo(message), harmony);
             ui = new DialogueUiController(service, message => log.LogInfo(message));
             ui.Install(harmony);
             service.RecordsChanged += ui.RefreshRecords;
@@ -116,7 +120,6 @@ namespace StudentAgeDialogueSave
                 try { action(); } catch (Exception ex) { log?.LogError("对话存档异步回调失败：" + ex); }
             }
             try { adv?.Tick(); } catch (Exception ex) { log?.LogWarning("ADV界面更新失败：" + ex.Message); }
-            adapter?.WarmConfigurationPlansTick();
             if (Time.realtimeSinceStartup < nextAutoCheck) return;
             nextAutoCheck = Time.realtimeSinceStartup + 1f;
             try
@@ -129,13 +132,14 @@ namespace StudentAgeDialogueSave
             catch (Exception ex) { log?.LogWarning("对话操作栏状态更新失败：" + ex.Message); }
             try { service?.TickAutoSave(); } catch (Exception ex) { log?.LogWarning("本次自动对话存档已跳过：" + ex.Message); }
         }
-        void OnApplicationQuit() { Shutdown(); }
+        void OnApplicationQuit() { if(exitSave?.IsPending!=true)Shutdown(); }
         void OnDestroy() { Shutdown(); }
         void Shutdown()
         {
             if (disposed) return; disposed = true;
             try
             {
+                Cleanup(() => exitSave?.Dispose());
                 Cleanup(() => adv?.Dispose());
                 Cleanup(() => service?.Dispose());
                 Cleanup(() => ui?.Dispose());

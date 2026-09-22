@@ -6,7 +6,22 @@ QA=ROOT/'qa/runtime'
 assert (QA/'isolation-verified.txt').exists()
 assert (QA/'StudentAge_Data/app.info').read_text()=='DlgSaveQA\nDialogSave'
 processes=subprocess.check_output(['ps','-axo','pid,command'],text=True)
-if any('StudentAge.exe -screen' in x and 'winewrapper' not in x for x in processes.splitlines()):raise SystemExit('Another game process is running')
+if any('StudentAge.exe' in x and 'winewrapper' not in x and 'exec_command' not in x and 'rg ' not in x for x in processes.splitlines()):raise SystemExit('Another game process is running')
+visual_flag=QA/'presentation-visual.txt'
+if '--presentation-visual' in sys.argv:visual_flag.write_text('Focused rendering only')
+else:visual_flag.unlink(missing_ok=True)
+presentation='--presentation' in sys.argv
+presentation_flag=QA/'presentation-mode.txt'
+if presentation:presentation_flag.write_text('Event context, intertitle and click-to-complete performance')
+else:presentation_flag.unlink(missing_ok=True)
+feedback='--feedback' in sys.argv or presentation
+feedback_flag=QA/'feedback-mode.txt'
+if feedback:feedback_flag.write_text('Rich choices and manual history return')
+else:feedback_flag.unlink(missing_ok=True)
+hotfix='--hotfix' in sys.argv
+hotfix_flag=QA/'hotfix-mode.txt'
+if hotfix:hotfix_flag.write_text('Compatibility, comic reuse, tooltip and exit save regression')
+else:hotfix_flag.unlink(missing_ok=True)
 preview='--preview' in sys.argv
 controls='--controls' in sys.argv
 adv_only='--adv-only' in sys.argv

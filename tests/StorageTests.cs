@@ -41,11 +41,51 @@ internal static class StorageTests
             Dialogue = JObject.Parse("{\"talkId\":123,\"phase\":\"afterEffect\",\"options\":[1,2]}")
         };
     }
+    private static void VerifyLocalCopies()
+    {
+        string root=Path.Combine(_root,"local-copy"),cloud=Path.Combine(root,"Cloud"),backup=Path.Combine(root,"Backups");
+        var repo=new Repository(cloud,Path.Combine(root,"Stage"),backup,retainLocalCopies:true);
+        var saved=repo.Publish(Sample());
+        string copy=Path.Combine(backup,"Retained",Path.GetFileName(saved.FilePath));
+        Check(File.Exists(copy)&&File.ReadAllBytes(copy).SequenceEqual(File.ReadAllBytes(saved.FilePath)),"every save has a byte-identical independent local copy");
+        File.Delete(saved.FilePath);
+        Check(repo.Load(saved.Header.RevisionId).World.SequenceEqual(Sample().World),"missing cloud body restores from local copy before load");
+        repo.Delete(saved.Header.RevisionId);
+        foreach(var path in Directory.GetFiles(cloud,"dialogue_*.dsav"))File.Delete(path);
+        var recovered=repo.Scan();
+        Check(Repository.FindHeads(recovered).Count==0&&recovered.Any(r=>r.Status==SaveStatus.Deleted),"lost cloud directory restores tombstones without resurrecting deleted saves");
+        Reject(()=>repo.Load(saved.Header.RevisionId),"local copy cannot bypass explicit deletion");
+        var other=repo.Publish(Sample(slot:"other"));
+        string otherCopy=Path.Combine(backup,"Retained",Path.GetFileName(other.FilePath));
+        File.WriteAllText(other.FilePath,"broken-cloud-file");repo.Scan();
+        Check(File.ReadAllText(other.FilePath)=="broken-cloud-file"&&File.Exists(otherCopy),"reconciliation preserves corrupt original and good backup independently");
+        File.Delete(other.FilePath);File.WriteAllText(otherCopy,"broken-backup");
+        repo.Scan();Check(!File.Exists(other.FilePath),"corrupt backup is not promoted into cloud directory");
+        var legacyRoot=Path.Combine(_root,"local-legacy");
+        var legacy=new Repository(Path.Combine(legacyRoot,"Cloud"),Path.Combine(legacyRoot,"Stage"),Path.Combine(legacyRoot,"Backups"));
+        var old=legacy.Publish(Sample());
+        var upgraded=new Repository(Path.Combine(legacyRoot,"Cloud"),Path.Combine(legacyRoot,"Stage"),Path.Combine(legacyRoot,"Backups"),retainLocalCopies:true);
+        upgraded.Scan();File.Delete(old.FilePath);
+        Check(upgraded.Load(old.Header.RevisionId).World.SequenceEqual(Sample().World),"first upgraded scan protects existing archives without rewriting them");
+        var branchRoot=Path.Combine(_root,"local-branches");
+        var branchRepo=new Repository(Path.Combine(branchRoot,"Cloud"),Path.Combine(branchRoot,"Stage"),Path.Combine(branchRoot,"Backups"),retainLocalCopies:true);
+        var branchA=branchRepo.Publish(Sample());var branchB=branchRepo.Publish(Sample());
+        File.Delete(branchA.FilePath);File.Delete(branchB.FilePath);
+        var heads=Repository.FindHeads(branchRepo.Scan());
+        Check(heads.Count==2&&heads.All(r=>r.IsConflict),"independent local recovery preserves both cloud branches without choosing by timestamp");
+        var blockRoot=Path.Combine(_root,"local-blocked");Directory.CreateDirectory(blockRoot);
+        File.WriteAllText(Path.Combine(blockRoot,"Backups"),"blocked");
+        int warnings=0;
+        var blocked=new Repository(Path.Combine(blockRoot,"Cloud"),Path.Combine(blockRoot,"Stage"),Path.Combine(blockRoot,"Backups"),retainLocalCopies:true,diagnostics:_=>warnings++);
+        var durable=blocked.Publish(Sample());
+        Check(File.Exists(durable.FilePath)&&warnings>0,"backup I/O failure does not misreport a durable primary commit as failed");
+    }
     private static void Main(string[] args)
     {
         if (args.Length > 0 && args[0] == "publish-worker") { PublishWorker(args); return; }
         _root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "StorageSandbox", Guid.NewGuid().ToString("N")));
         Directory.CreateDirectory(_root);
+        VerifyLocalCopies();
         var repo = Repo("basic");
         var original = Sample();
         var first = repo.Publish(original);

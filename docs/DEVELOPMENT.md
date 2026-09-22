@@ -49,4 +49,6 @@ dotnet run --project tests/AdapterContractProbe -- "/path/to/StudentAge/StudentA
 
 CI 检查存储和纯数据行为，不能验证 Unity 画面或全部剧情。真实游戏测试、Windows 原生环境、CrossOver、云同步分别记录，不能互相代替。历史实测与尚未完成项见 [STATUS.md](STATUS.md)。
 
-`dist/` 仅为本地构建产物；本仓库当前上传的是开发源码，没有发布正式版安装包。
+`dist/` 仅为本地构建与 Steam 测试包产物；不上传游戏依赖或存档。`tools/package_workshop.py` 核对源码和构建 DLL 一致后组装原生 `plugins/` 布局，不调用 Steam 上传。
+
+本轮定向验证：`python3 tools/run_qa.py --adv-only --hotfix`，覆盖跨版本实际恢复、真实旧档、卡片提示页终止、漫画复用和退出存档成功/失败。

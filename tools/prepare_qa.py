@@ -19,6 +19,8 @@ clone(GAME/'BepInEx/core',QA/'BepInEx/core') if (QA/'BepInEx').exists() else Non
 clone(GAME/'BepInEx/core',QA/'BepInEx/core')
 (QA/'BepInEx/plugins').mkdir(exist_ok=True)
 (QA/'data').mkdir(exist_ok=True)
+# Never leave a previous isolation proof valid while native assemblies are staged.
+(QA/'isolation-verified.txt').unlink(missing_ok=True)
 # Always start from untouched code before rewriting (data assets are cloned just once).
 for src in (GAME/'StudentAge_Data/Managed').glob('*.dll'):shutil.copy2(src,QA/'StudentAge_Data/Managed'/src.name)
 shutil.copy2(ROOT/'dist/StudentAgeDialogueSave/BepInEx/plugins/StudentAgeDialogueSave/StudentAgeDialogueSave.dll',QA/'BepInEx/plugins/StudentAgeDialogueSave.dll')

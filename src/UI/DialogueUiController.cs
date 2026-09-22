@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using Components;
+using StudentAgeDialogueSave.GameIntegration;
 using TMPro;
 using GenUI.Main;
 using HarmonyLib;
@@ -97,7 +98,7 @@ namespace StudentAgeDialogueSave.UI
                 Patch(typeof(EntryView), "OnHotKeyInput", nameof(EntryHotkey), true);
                 Patch(typeof(BaseView), "OnClose", nameof(ViewClosed), false);
                 Patch(typeof(BaseView), "OnDestroy", nameof(ViewClosed), true);
-                bindings = new DialogueHotkeyBindings(() => !disposed && service.IsDialogueContext && AdvDialogueController.Active?.BlocksActions != true,
+                bindings = new DialogueHotkeyBindings(() => !disposed && service.IsDialogueContext && EventControls && AdvDialogueController.Active?.BlocksActions != true,
                     ExecuteAction, log);
                 bindings.BindingsChanged += RefreshActions;
                 RefreshActions();
@@ -161,6 +162,11 @@ namespace StudentAgeDialogueSave.UI
             }
         }
 
+        internal void SuspendDialogueControls()
+        {
+            foreach(var view in hotkeys.Keys.ToArray())ClearHotkeys(view);
+        }
+
         public void RefreshRecords()
         {
             if (disposed) return;
@@ -187,8 +193,16 @@ namespace StudentAgeDialogueSave.UI
                 top.gameObject.activeInHierarchy && top.itemgroup_key != null) return top;
             return UIMgr.GetView<HotkeyView>(false);
         }
-        private static void RefreshToolbar(BaseView view)
+        internal int ToolbarRefreshCount {get;private set;}
+        bool EventControls
         {
+            get {var view=UIMgr.GetView<NewTalkView>(false) as NewTalkView;
+                return view!=null && !DialoguePresentationPolicy.IsTransition(view) && !AdvDialogueController.IsComic(view);}
+        }
+        bool NativeControls=>EventControls && AdvDialogueController.Active?.UsesAdv(UIMgr.GetView<NewTalkView>(false) as NewTalkView)!=true;
+        private void RefreshToolbar(BaseView view)
+        {
+            ToolbarRefreshCount++;
             if (view is TopView) TopRefreshHotkey.Invoke(view, null);
             else view.Refresh();
         }
@@ -196,7 +210,7 @@ namespace StudentAgeDialogueSave.UI
         {
             var primary = PrimaryToolbar();
             var legacy = UIMgr.GetView<HotkeyView>(false) as HotkeyView;
-            bool suppress = service.IsDialogueContext && primary is TopView && legacy != null && legacy.itemgroup_key != null;
+            bool suppress = service.IsDialogueContext && EventControls && primary is TopView && legacy != null && legacy.itemgroup_key != null;
             if (suppress)
             {
                 ClearHotkeys(legacy);
@@ -234,10 +248,10 @@ namespace StudentAgeDialogueSave.UI
             UpdateDuplicateRows();
             var view = PrimaryToolbar();
             var top = UIMgr.GetTopView(ViewType.Guide, ViewType.Side);
-            bool expected = service.IsDialogueContext && top is NewTalkView;
+            bool expected = service.IsDialogueContext && top is NewTalkView && NativeControls;
             HotkeyDecoration decoration;
             int activeCount = view != null && hotkeys.TryGetValue(view, out decoration) ?
-                decoration.Added.Count(o => o != null && o.activeInHierarchy) : 0;
+                decoration.Added.Count(o => o != null && o.activeSelf) : 0;
             string state = "context=" + service.IsDialogueContext + ";top=" + (top == null ? "none" : top.GetType().Name) +
                 ";toolbar=" + (view != null) + ";actions=" + activeCount;
             if (state != lastActionDiagnostic)
@@ -285,7 +299,7 @@ namespace StudentAgeDialogueSave.UI
             {
                 existing.Dispose(); escapeMenus.Remove(entry);
             }
-            if (!service.IsDialogueContext || !DialogueEscapeMenu.IsDialogueMenu(entry) || bindings == null) return;
+            if (!service.IsDialogueContext || !EventControls || !DialogueEscapeMenu.IsDialogueMenu(entry) || bindings == null) return;
             escapeMenus.Add(entry, new DialogueEscapeMenu(entry, a => Guard(() => ExecuteAction(a))));
         }
 
@@ -403,7 +417,7 @@ namespace StudentAgeDialogueSave.UI
         {
             UpdateDuplicateRows();
             if (view != PrimaryToolbar()) return;
-            if (!service.IsDialogueContext || ToolbarGroup(view) == null || bindings == null)
+            if (!service.IsDialogueContext || !NativeControls || ToolbarGroup(view) == null || bindings == null)
                 return;
             var top = UIMgr.GetTopView(ViewType.Guide, ViewType.Side);
             // Respect actual modal windows; CG/lyrics/animation states of the dialogue itself remain operable.

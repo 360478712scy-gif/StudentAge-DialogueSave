@@ -42,6 +42,14 @@ python3 tools/check.py
 
 此命令运行存储、配置比较和历史数据编码测试，**不需要游戏，不会启动游戏**。GitHub Actions 执行相同检查。真实游戏测试需单独建立隔离环境，见 [开发与验证](docs/DEVELOPMENT.md)。
 
+### 打包 Steam 模组（不发布）
+
+```sh
+python3 tools/package_workshop.py
+```
+
+先构建插件，再生成 `dist/workshop/` 下的原生 `plugins/` 模组目录、ZIP 与 SHA-256。安装规则和验证边界见 [Steam 测试包说明](docs/WORKSHOP.md)。
+
 ## 仓库结构
 
 ```text

@@ -74,7 +74,7 @@ namespace StudentAgeDialogueSave
                 if (busy || IsListing) { reason = "正在处理上一账户的存档，请稍候。"; return false; }
                 string user = Platform.Current.GetUserId();
                 string basePath = Path.Combine(Application.persistentDataPath, "DialogueSaveLocal", user);
-                var nextRepository = new Repository(path, Path.Combine(basePath, "Staging"), Path.Combine(basePath, "Backups"));
+                var nextRepository = new Repository(path, Path.Combine(basePath, "Staging"), Path.Combine(basePath, "Backups"), retainLocalCopies: true, diagnostics: SafeLog);
                 string idPath = Path.Combine(basePath, "device-id.txt");
                 Directory.CreateDirectory(basePath);
                 string nextDeviceId;
@@ -172,7 +172,7 @@ namespace StudentAgeDialogueSave
             if (disposed || token != menuGeneration || !menuOpen) throw new OperationCanceledException();
             SafeLog("对话保存窗口已就绪，开始主线程快照；当前对白保持暂停。");
         }
-        async Task<GameCheckpoint> CaptureRequestedAsync(CancellationToken cancellation)
+        async Task<GameCheckpoint> CaptureRequestedAsync(CancellationToken cancellation, bool exiting = false)
         {
             // Requests have independent cancellation. Closing a menu must release its capture
             // without cancelling a quick-save request queued behind it.
@@ -190,7 +190,7 @@ namespace StudentAgeDialogueSave
                 { cancellation.ThrowIfCancellationRequested(); await nextFrame(); }
                 cancellation.ThrowIfCancellationRequested();
                 captureInProgress = true; ownsCapture = true;
-                return await adapter.CaptureAsync(cancellation);
+                return exiting ? await adapter.CaptureExitAsync(cancellation) : await adapter.CaptureAsync(cancellation);
             }
             finally
             {
@@ -560,6 +560,23 @@ namespace StudentAgeDialogueSave
             finally { quickLoadRequested = false; }
         }
         void ReleaseQuickPause() { var pause = quickLoadPause; quickLoadPause = null; pause?.Dispose(); }
+        internal async Task SaveBeforeExitAsync(CancellationToken cancellation)
+        {
+            if (!IsDialogueContext || adapter.IsRestoring) return;
+            // A save-page snapshot is already frozen at the player's current position.
+            var checkpoint = menuCheckpoint;
+            EndMenu();
+            if (!EnsureRepository(out string reason)) throw new IOException(reason);
+            if (checkpoint == null) checkpoint = await CaptureRequestedAsync(cancellation, true);
+            await WaitForStoreAsync(cancellation);
+            cancellation.ThrowIfCancellationRequested();
+            // Slot 2 is separate from periodic autosave; PublishAsync still checks parents
+            // under the repository lock and never overwrites a competing cloud branch.
+            UiResult result = await PublishAsync(checkpoint, DialogueUiCategory.Auto, 2, null);
+            if (!result.Success) throw new IOException(result.Message);
+            SafeLog("退出对话自动存档已完成。");
+        }
+
         public void TickAutoSave()
         {
             if (!autoEnabled || disposed || pendingLoads.Count > 0 || quickLoadRequested || busy || quickSaveRequested || autoSaveRequested || captureRequests > 0 || menuOpen || Time.realtimeSinceStartup < nextAutoTime) return;

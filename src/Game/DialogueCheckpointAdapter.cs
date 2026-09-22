@@ -58,6 +58,7 @@ namespace StudentAgeDialogueSave.GameIntegration
         private double configWarmMilliseconds;
         private bool capturing;
         private bool captureRequested;
+        private bool exitCapture;
         private NewTalkView captureView;
         private NewTalkView playbackResumeView;
         private bool playbackResumeAuto;
@@ -222,9 +223,6 @@ namespace StudentAgeDialogueSave.GameIntegration
             var view = UIMgr.GetView<NewTalkView>(false) as NewTalkView;
             if (view == null || view.viewState != ViewState.Opened || !view.gameObject.activeInHierarchy)
                 return Refuse(out reason, "当前没有正在显示的普通对话");
-            try { DialogueContinuation.Capture(view); }
-            catch (InvalidOperationException error) { return Refuse(out reason, error.Message); }
-            catch (InvalidDataException error) { return Refuse(out reason, error.Message); }
             if (Singleton<FuncMgr>.Ins.GetGuideData().showingGuide != 0)
                 return Refuse(out reason, "正在进行引导操作，请完成引导后保存");
             bool pausedTyping = view.talkState == TalkState.Anim &&
@@ -251,6 +249,9 @@ namespace StudentAgeDialogueSave.GameIntegration
                 return Refuse(out reason, "对白仍在显示过程中");
             if (Get<int>(view, "curBgId") <= 0 || !Cfg.BgCfgMap.ContainsKey(Get<int>(view, "curBgId")))
                 return Refuse(out reason, "当前背景状态尚不能完整恢复");
+            try { DialogueContinuation.Capture(view); }
+            catch (InvalidOperationException error) { return Refuse(out reason, error.Message); }
+            catch (InvalidDataException error) { return Refuse(out reason, error.Message); }
             try { foreach (var option in ReadOptions(view)) DialogueContinuation.CaptureCallback(option.callback); }
             catch (InvalidOperationException error) { return Refuse(out reason, error.Message); }
             catch (InvalidDataException error) { return Refuse(out reason, error.Message); }
@@ -284,15 +285,14 @@ namespace StudentAgeDialogueSave.GameIntegration
 
         public GameCheckpoint Capture() => CaptureCore(false, out _);
 
-        // Ephemeral history keeps detached worlds and shared, exactly-compared config
-        // snapshots in memory. Hash only a selected rollback target; never write a save
-        // file or run a background hashing job for every displayed line.
+        // History owns detached world bytes and presentation state, entirely in memory.
+        // Global configuration and plugin binaries are diagnostics, not world state:
+        // do not traverse/hash them for each line or replay effects when jumping.
         internal HistoryCheckpoint CaptureHistory()
         {
             var time=System.Diagnostics.Stopwatch.StartNew();
             GameCheckpoint state=CaptureCore(true,out ConfigFingerprintSnapshot config,true);
-            cachedConfig=config;
-            return new HistoryCheckpoint { State=state, Config=config, CaptureMilliseconds=time.Elapsed.TotalMilliseconds };
+            return new HistoryCheckpoint { State=state, CaptureMilliseconds=time.Elapsed.TotalMilliseconds };
         }
         internal Task RestoreHistoryAsync(HistoryCheckpoint history, CancellationToken cancellation)
         {
@@ -300,13 +300,16 @@ namespace StudentAgeDialogueSave.GameIntegration
             if(history?.State==null)throw new InvalidDataException("缺少完整历史快照");
             var state=new GameCheckpoint { WorldBytes=history.State.WorldBytes,
                 Dialogue=(JObject)history.State.Dialogue.DeepClone(),Brief=history.State.Brief };
-            // The in-memory checkpoint owns all detached configuration fields. Exact
-            // comparison supplies stronger evidence than hashing that same copy first.
-            // Disk archives still use their SHA contract; both routes share every
-            // world, dependency, continuation and generation validation below.
+            // Returning to a line is a manual reading action, not a request to resume
+            // the auto/fast-forward mode used when its checkpoint was recorded.
+            // Only change the detached history copy; disk saves keep their playback policy.
+            state.Dialogue["playback"]=new JObject { ["auto"]=false, ["timeScale"]=1f, ["autoDelayRemaining"]=-1f };
+            // Use the same world restore path as a disk archive, without disk reads
+            // or replaying the intervening dialogue/choice effects.
             return RestoreCheckedAsync(state,cancellation,history.Config);
         }
 
+        bool capturingHistory;
         private GameCheckpoint CaptureCore(bool detachConfig, out ConfigFingerprintSnapshot config,bool history=false)
         {
             config = null;
@@ -314,21 +317,27 @@ namespace StudentAgeDialogueSave.GameIntegration
             if (!CanCaptureCore(history,out string reason)) throw new InvalidOperationException(reason);
             NewTalkView view = UIMgr.GetView<NewTalkView>(false) as NewTalkView;
             EnsureTracked(view);
-            capturing = true;
+            capturing = true; capturingHistory = history;
             var elapsed = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                JObject dialogue = Measure("dialogue", () => CaptureDialogue(view, detachConfig));
-                if (detachConfig) config = CurrentConfigSnapshot();
+                JObject dialogue = Measure("dialogue", () => CaptureDialogue(view, detachConfig, history));
                 byte[] bytes = CaptureWorld();
                 return new GameCheckpoint { Dialogue = dialogue, WorldBytes = bytes, Brief = BuildBrief(view), HistoryTrail=history?null:CaptureHistoryTrail?.Invoke() };
             }
-            finally { capturing = false; Trace("capture.total", elapsed.Elapsed.TotalMilliseconds); }
+            finally { capturing = false; Trace("capture.total", elapsed.Elapsed.TotalMilliseconds); capturingHistory = false; }
         }
 
         /// <summary>Accept once, pause text before its completion effect and settle presentation resources,
-        /// and detach a complete snapshot on the main thread. Background hashing then allows
-        /// playback to resume; callers keeping a menu open must already hold its pause lease.</summary>
+        /// and detach a complete snapshot on the main thread. Playback resumes before history
+        /// compression and disk writes; callers keeping a menu open hold their own pause lease.</summary>
+        internal async Task<GameCheckpoint> CaptureExitAsync(CancellationToken token)
+        {
+            exitCapture = true;
+            try { return await CaptureAsync(token); }
+            finally { exitCapture = false; }
+        }
+
         public async Task<GameCheckpoint> CaptureAsync(CancellationToken cancellationToken = default(CancellationToken))
         {
             AssertThread();
@@ -374,26 +383,11 @@ namespace StudentAgeDialogueSave.GameIntegration
                     if (CanCapture(out string reason))
                     {
                         GameCheckpoint checkpoint = CaptureCore(true, out ConfigFingerprintSnapshot config);
-                        // Only detached pure values cross threads. Poll via the Unity host so task
-                        // completion cannot resume game code on a worker synchronization context.
-                        var hashTime = System.Diagnostics.Stopwatch.StartNew();
-                        bool reusedDigest = config.Digest != null;
-                        Task<string> digest = ConfigHashTask(config);
-                        // World/config are now immutable. A menu's own lease stays held, while
-                        // automatic/quick saves can resume immediately during background hashing.
+                        // The complete world and dialogue are detached on the main thread.
+                        // Global config and DLL hashes are not restore prerequisites. Computing
+                        // them here stalls typing and adds no protection to this snapshot.
                         releaseCapture();
-                        while (!digest.IsCompleted)
-                        {
-                            cancellationToken.ThrowIfCancellationRequested();
-                            await nextFrame(); AssertThread();
-                            if (disposed) throw new OperationCanceledException();
-                        }
                         cancellationToken.ThrowIfCancellationRequested();
-                        checkpoint.Dialogue["configDigest"] = digest.GetAwaiter().GetResult();
-                        Trace("config.hash.worker", hashTime.Elapsed.TotalMilliseconds);
-                        // The captured world/config remain one valid historical instant. Only
-                        // promote this as a reusable current cache after checking live values again.
-                        if (reusedDigest || Measure("config.compare.afterHash", config.MatchesCurrent)) cachedConfig = config;
                         checkpoint.Dialogue["playback"] = new JObject { ["auto"] = wasAuto, ["timeScale"] = wasScale, ["autoDelayRemaining"] = wasDelay };
                         if(checkpoint.HistoryTrail?.Length>0)
                         {
@@ -445,13 +439,10 @@ namespace StudentAgeDialogueSave.GameIntegration
                 trail=unpack.GetAwaiter().GetResult();
             }
             var restoreClock = System.Diagnostics.Stopwatch.StartNew();
-            if(historyConfig==null)await ValidateConfigAsync(snapshot.Dialogue, cancellationToken);
-            else
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if(!historyConfig.MatchesCurrent())throw new InvalidDataException("对白或选项配置已改变，请使用保存时的 Mod 版本");
-                cachedConfig=historyConfig;
-            }
+            cancellationToken.ThrowIfCancellationRequested();
+            // Fingerprints describe the capture environment, not the archive format.
+            // Restore validates the actual saved nodes, world schema and continuation below.
+            // A mod update or native in-place animation sorting must not invalidate old saves.
             Trace("restore.config", restoreClock.Elapsed.TotalMilliseconds); restoreClock.Restart();
             if (!CanRestore(out reason)) throw new InvalidOperationException(reason);
             Validate(snapshot.Dialogue, false);
@@ -589,7 +580,7 @@ namespace StudentAgeDialogueSave.GameIntegration
             }
         }
 
-        private JObject CaptureDialogue(NewTalkView view, bool detachConfig = false)
+        private JObject CaptureDialogue(NewTalkView view, bool detachConfig = false, bool history = false)
         {
             TalkCfg cfg = Get<TalkCfg>(view, "cfg");
             var roles = Get<Dictionary<int, NewTalkRoleData>>(view, "roles");
@@ -600,6 +591,7 @@ namespace StudentAgeDialogueSave.GameIntegration
                 ["adapter"] = Continuation,
                 ["gameModule"] = typeof(global::Game).Module.ModuleVersionId.ToString("D"),
                 ["rootEvent"] = rootEvent,
+                ["presentationEvent"] = DialoguePresentationPolicy.EventId(view),
                 ["continuation"] = DialogueContinuation.Capture(view),
                 ["roundState"] = (int)Singleton<RoundMgr>.Ins.RoundState,
                 ["roundEndQueue"] = new JArray(EndQueue()),
@@ -632,8 +624,8 @@ namespace StudentAgeDialogueSave.GameIntegration
                 ["history"] = JArray.FromObject(Get<List<TalkData>>(view, "historys"), DataJson),
                 ["options"] = new JArray(options.Select(x => new JObject { ["id"] = x.id, ["rate"] = x.rate,
                     ["callback"] = DialogueContinuation.CaptureCallback(x.callback) })),
-                ["configDigest"] = detachConfig ? "" : Measure("config.fingerprint", () => ConfigDigest(cfg, options.Select(x => x.id))),
-                ["plugins"] = Measure("plugins.fingerprint", PluginFingerprint),
+                ["configDigest"] = "", // Legacy optional diagnostic; archive integrity is checked separately.
+                ["plugins"] = PluginMetadata(),
                 ["activeMods"] = new JArray(Singleton<ModCtrl>.Ins.activeMods ?? new List<ulong>()),
                 ["audio"] = DialogueAudioAdapter.Capture(),
                 ["pendingGuides"] = Singleton<FuncMgr>.Ins.GetGuideData().addGuides == null ? JValue.CreateNull()
@@ -645,6 +637,7 @@ namespace StudentAgeDialogueSave.GameIntegration
         private void RestorePresentation(NewTalkView view, JObject data)
         {
             trackedView = view;
+            DialoguePresentationPolicy.Bind(view, data.Value<int?>("presentationEvent") ?? data.Value<int>("rootEvent"));
             pendingTalk = 0;
             TalkCfg cfg = Cfg.TalkCfgMap[data.Value<int>("talkId")];
             view.IniSetting();
@@ -891,7 +884,7 @@ namespace StudentAgeDialogueSave.GameIntegration
 
         private void Trace(string stage, double milliseconds, int bytes = -1)
         {
-            if (diagnostics == null) return;
+            if (diagnostics == null || capturingHistory) return;
             try { diagnostics("DialogueSave PERF " + stage + "=" + milliseconds.ToString("F1", System.Globalization.CultureInfo.InvariantCulture) +
                 "ms" + (bytes < 0 ? "" : " bytes=" + bytes)); }
             catch { /* Diagnostics cannot turn a valid capture into a failed transaction. */ }
@@ -923,7 +916,7 @@ namespace StudentAgeDialogueSave.GameIntegration
             if (data.Value<int>("format") != 1 || data.Value<string>("adapter") != Continuation)
                 throw new InvalidDataException("不支持此对话恢复格式");
             if (data.Value<string>("gameModule") != typeof(global::Game).Module.ModuleVersionId.ToString("D"))
-                throw new InvalidDataException("游戏版本已变化，不能安全恢复此对话");
+                diagnostics?.Invoke("存档来自另一游戏构建，按实际恢复结构检查兼容性。");
             int id = data.Value<int>("talkId");
             if (!Cfg.TalkCfgMap.TryGetValue(id, out TalkCfg cfg) ||
                 (data.Value<int>("rootEvent") > 0 && !Cfg.EvtCfgMap.ContainsKey(data.Value<int>("rootEvent"))))
@@ -961,8 +954,7 @@ namespace StudentAgeDialogueSave.GameIntegration
                 if (float.IsNaN(delay) || float.IsInfinity(delay) || delay < -1f || delay > 3600f)
                     throw new InvalidDataException("自动播放等待时间无效");
             }
-            if (checkConfig && data.Value<string>("configDigest") != ConfigDigest(cfg, options.Select(t => t.Value<int>("id"))))
-                throw new InvalidDataException("对白或选项配置已改变，请使用保存时的 Mod 版本");
+            // Global configuration digests are retained for diagnostics only.
             if (!(data["roles"] is JArray roles) || roles.Count > 32 ||
                 roles.Select(t => t.Value<int>("roleId")).Distinct().Count() != roles.Count ||
                 roles.Any(t => !Cfg.PersonCfgMap.ContainsKey(t.Value<int>("roleId")))) throw new InvalidDataException("立绘数据无效");
@@ -978,22 +970,27 @@ namespace StudentAgeDialogueSave.GameIntegration
             if (data["pendingGuides"] == null || (data["pendingGuides"].Type != JTokenType.Null &&
                 (!(data["pendingGuides"] is JArray guides) || guides.Count > 10000 || guides.Any(t => t.Type != JTokenType.Integer || (int)t <= 0))))
                 throw new InvalidDataException("未提交引导状态无效");
-            if (!PluginFingerprintsMatch(data["plugins"] as JArray, PluginFingerprint())) throw new InvalidDataException("BepInEx 插件组合或版本与存档不同，不能安全恢复");
+            // Never open plugin DLLs on a restore. Missing/unreadable binaries and
+            // diagnostic metadata must not turn into an indirect version gate.
+            var savedPlugins=data["plugins"] as JArray;
+            var currentPlugins=PluginMetadata();
+            if(savedPlugins==null || !savedPlugins.Select(p=>(string)p["guid"]+":"+(string)p["version"])
+                .SequenceEqual(currentPlugins.Select(p=>(string)p["guid"]+":"+(string)p["version"])))
+                diagnostics?.Invoke("存档的插件版本与当前不同；继续按实际数据恢复。");
         }
 
-        private static void ValidateMods(Dictionary<string, ISaveLoadValue> world, JObject data)
+        private void ValidateMods(Dictionary<string, ISaveLoadValue> world, JObject data)
         {
             var profile = world.Values.OfType<ProfileModel>().Single();
             ulong[] active = (Singleton<ModCtrl>.Ins.activeMods ?? new List<ulong>()).Distinct().OrderBy(x => x).ToArray();
             ulong[] saved = (profile.modList ?? new List<ulong>()).Distinct().OrderBy(x => x).ToArray();
             if (!(data["activeMods"] is JArray mods) || !Enumerable.SequenceEqual(active, saved) ||
                 !Enumerable.SequenceEqual(active, mods.ToObject<ulong[]>(DataJson).Distinct().OrderBy(x => x)))
-                throw new InvalidDataException("启用的 Mod 与对话存档不同，请使用保存时的 Mod 组合");
+                diagnostics?.Invoke("启用的 Mod 列表与存档不同；关键节点已单独检查，继续恢复。");
         }
 
-        // Our archive format/adapter and exact plugin version are the compatibility contract.
-        // Retain build hashes in the file for diagnosis, without invalidating archives after
-        // a UI-only rebuild. Other plugins still require the exact recorded binary.
+        // Diagnostic comparison only. No plugin version or binary identity is a load gate.
+        // Archive structure and actual required game nodes are validated separately.
         private static bool PluginFingerprintsMatch(JArray saved, JArray current)
         {
             JArray Normalize(JArray entries)
@@ -1009,6 +1006,10 @@ namespace StudentAgeDialogueSave.GameIntegration
             var left = Normalize(saved); var right = Normalize(current);
             return left != null && right != null && JToken.DeepEquals(left, right);
         }
+
+        private static JArray PluginMetadata() => new JArray(Chainloader.PluginInfos.Values
+            .OrderBy(p=>p.Metadata.GUID,StringComparer.Ordinal).Select(info=>new JObject {
+                ["guid"]=info.Metadata.GUID,["version"]=info.Metadata.Version.ToString() }));
 
         private static JArray PluginFingerprint()
         {
@@ -1095,40 +1096,6 @@ namespace StudentAgeDialogueSave.GameIntegration
             return digest;
         }
 
-        private async Task ValidateConfigAsync(JObject data, CancellationToken cancellationToken)
-        {
-            string expected = data.Value<string>("configDigest");
-            if (string.IsNullOrEmpty(expected) || expected.Length != 64) throw new InvalidDataException("配置校验信息缺失");
-            int changes = 0;
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (disposed) throw new OperationCanceledException("插件已关闭");
-                ConfigFingerprintSnapshot snapshot = CurrentConfigSnapshot();
-                bool cached = snapshot.Digest != null;
-                Task<string> hash = ConfigHashTask(snapshot);
-                while (!hash.IsCompleted)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    await nextFrame(); AssertThread();
-                    if (disposed) throw new OperationCanceledException("插件已关闭");
-                }
-                cancellationToken.ThrowIfCancellationRequested();
-                string actual = hash.GetAwaiter().GetResult();
-                // A cached hit had no await. Otherwise direct field edits/hot reload during the
-                // worker hash must be checked before validating against the world we will load.
-                if (!cached && !Measure("config.compare.beforeRestore", snapshot.MatchesCurrent))
-                {
-                    if (++changes >= 3) throw new InvalidOperationException("游戏配置持续变化，无法校验此对话存档");
-                    continue;
-                }
-                cachedConfig = snapshot;
-                if (!string.Equals(expected, actual, StringComparison.Ordinal))
-                    throw new InvalidDataException("对白或选项配置已改变，请使用保存时的 Mod 版本");
-                return;
-            }
-        }
-
         private static string LegacyConfigDigest(TalkCfg cfg, IEnumerable<int> optionIds)
         {
             // Recompute from effective, loaded dictionaries at each capture/validation. No cache can hide
@@ -1188,6 +1155,7 @@ namespace StudentAgeDialogueSave.GameIntegration
             {
                 if (view.viewState != ViewState.Opened || view.gameObject == null || !view.gameObject.activeInHierarchy) continue;
                 string name = view.GetType().Name;
+                if (exitCapture && (view is EntryView || name == "CommonComfirmView")) continue;
                 if (view is NewTalkView || DialogueContinuation.IsBaseView(view.GetType()) || view is TopView || view is SaveView || name == "HotkeyView" || name == "DescriptionView" || name == "ToastView") continue;
                 return false;
             }

@@ -25,3 +25,6 @@
 .idea/
 .venv/
 venv/
+
+# Steam 工坊发布素材(截图/封面,约 13MB),由 tools/package_workshop.py 生成
+/distribution/

@@ -84,6 +84,11 @@ namespace StudentAgeDialogueSave.GameIntegration
             try
             {
                 var checkpoint=adapter.CaptureHistory();
+                // Reuse an immutable byte buffer only after full byte equality. Effects,
+                // random state and presentation are still captured at every boundary.
+                var previous=Entries.Count==0?null:Entries[Entries.Count-1].Checkpoint.State.WorldBytes;
+                if(previous!=null && previous.Length==checkpoint.State.WorldBytes.Length &&
+                    Enumerable.SequenceEqual(previous,checkpoint.State.WorldBytes))checkpoint.State.WorldBytes=previous;
                 lastTalk=cfg.id;lastSegment=view.tmpTalkIdx;lastCount=count;lastPhase=phase;
                 LastCaptureMilliseconds=checkpoint.CaptureMilliseconds;
                 lastFailure=null;

@@ -306,15 +306,20 @@ namespace StudentAgeDialogueSave.UI
             // Handlers guard busy; only the actual selected slot uses native disabled styling.
             card.btn_add.interactable = view.isSaveMode && category == DialogueUiCategory.Manual && !isSelected;
             card.btn_click.interactable = !isSelected;
-            if (record == null) return;
+            if (record == null)
+            {
+                var stale = card.btn_note.gameObject.GetComponent<Description>();
+                if (stale != null) { stale.OnPointerExit(null); stale.getDescription = null; }
+                return;
+            }
             card.txt_item.text = Ellipsize(card.txt_item, string.IsNullOrWhiteSpace(record.Speaker) ? "旁白" : record.Speaker);
             card.txt_note.text = Ellipsize(card.txt_note, record.Summary);
             var description = card.btn_note.gameObject.GetComponent<Description>() ?? card.btn_note.gameObject.AddComponent<Description>();
-            description.getDescription = _ => new DescData
+            description.getDescription = index => index == 0 ? new DescData
             {
                 title = SafeDescription(string.IsNullOrWhiteSpace(record.Speaker) ? "旁白" : record.Speaker),
                 txt = SafeDescription(record.Summary)
-            };
+            } : (DescData?)null;
             card.txt_scene.text = Ellipsize(card.txt_scene, record.Location);
             card.txtex_year.text = record.YearLabel ?? "";
             card.txtex_season.text = record.SeasonLabel ?? "";

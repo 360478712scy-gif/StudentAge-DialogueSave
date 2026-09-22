@@ -83,11 +83,13 @@ public static class RuntimeAdvQA
         try
         {
             cfg.content=originalContent+"配置变更验证";
-            var rejected=adv.History.Restore(0);yield return until(()=>rejected.IsCompleted,10,"history checks actual configuration fields");
-            check(rejected.IsFaulted && rejected.Exception!=null && UIMgr.GetView<NewTalkView>(false)==talk && !adapter.IsRestoring,
-                "changed configuration rejects rollback before abandoning the current dialogue");
+            var updated=adv.History.Restore(0);yield return until(()=>updated.IsCompleted,40,"history remains loadable after mod text update");
+            updated.GetAwaiter().GetResult();
+            check(!adapter.IsRestoring,"changed configuration does not invalidate existing history");
         }
         finally{cfg.content=originalContent;}
+        if(!adv.ModalOpen)adv.OpenHistory();
+        yield return null;
         RuntimeUiQA.Click("ADV.Rollback.0",check);
         yield return null;
         RuntimeUiQA.Click("ADV.JumpRemember",check);

@@ -115,7 +115,8 @@ public static class RuntimeSemanticQA
             try
             {
                 Cfg.TalkCfgMap[Final].content += "配置已改变";
-                yield return RejectUnchanged(adapter, atOptions, check, until, "配置", "changed configuration");
+                yield return Restore(adapter, atOptions, until, "updated configuration restores saved options");
+                check(Talk.talkState==TalkState.Option,"text-only mod update preserves the saved choice boundary");
             }
             finally { Cfg.TalkCfgMap[Final].content = contentBefore; }
 
@@ -137,7 +138,7 @@ public static class RuntimeSemanticQA
                 requiringMissingMod = adapter.Capture();
             }
             finally { modCtrl.activeMods = modsBefore; profile.modList = profileModsBefore; }
-            yield return RejectUnchanged(adapter, requiringMissingMod, check, until, "Mod", "missing synthetic Mod dependency");
+            yield return Restore(adapter, requiringMissingMod, until, "changed mod list with all real dependencies present");
             check(SaveMgr.GetPref("LatestSaveKey", "") == latest, "semantic restore and preflight rejection never modify LatestSaveKey");
         }
         finally

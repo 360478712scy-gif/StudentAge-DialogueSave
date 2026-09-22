@@ -43,10 +43,11 @@ public sealed class DialogueQaDriver:MonoBehaviour
         var stack=new Stack<IEnumerator>();stack.Push(Run());bool failed=false;
         while(stack.Count>0){bool more=false;object next=null;try{more=stack.Peek().MoveNext();if(more)next=stack.Peek().Current;}catch(Exception ex){failed=true;File.WriteAllText(Path.Combine(output,"failed.txt"),ex.ToString());log.LogError(ex);}if(failed)break;if(!more){stack.Pop();continue;}var nested=next as IEnumerator;if(nested!=null){stack.Push(nested);continue;}yield return next;}
         RuntimeAdvQA.IsolateInput(false);
-        if(!failed)File.WriteAllText(Path.Combine(output,"success.txt"),File.Exists(Path.Combine(root,"adv-only.txt")) ? "DIALOGUE_ADV_FIRST_FRAME_AND_LOG_PREVIEW_OK" : File.Exists(Path.Combine(root,"adv-mode.txt")) ? "DIALOGUE_ADV_FUNCTIONAL_OK_PERFORMANCE_SEPARATE" : File.Exists(Path.Combine(root,"recovery-mode.txt")) ? "DIALOGUE_RECOVERY_RUNTIME_OK" : File.Exists(Path.Combine(root,"font-mode.txt")) ? "DIALOGUE_FONT_RUNTIME_OK" : File.Exists(Path.Combine(root,"controls-mode.txt")) ? "DIALOGUE_CONTROLS_RUNTIME_OK" : File.Exists(Path.Combine(root,"preview-mode.txt")) ? "DIALOGUE_LOAD_UI_PREVIEW_OK" : "DIALOGUE_ISOLATED_RUNTIME_OK");
+        if(!failed)File.WriteAllText(Path.Combine(output,"success.txt"),File.Exists(Path.Combine(root,"feedback-mode.txt")) ? "DIALOGUE_FEEDBACK_FIXES_OK" : File.Exists(Path.Combine(root,"hotfix-mode.txt")) ? "DIALOGUE_HOTFIX_RUNTIME_OK" : File.Exists(Path.Combine(root,"adv-only.txt")) ? "DIALOGUE_ADV_FIRST_FRAME_AND_LOG_PREVIEW_OK" : File.Exists(Path.Combine(root,"adv-mode.txt")) ? "DIALOGUE_ADV_FUNCTIONAL_OK_PERFORMANCE_SEPARATE" : File.Exists(Path.Combine(root,"recovery-mode.txt")) ? "DIALOGUE_RECOVERY_RUNTIME_OK" : File.Exists(Path.Combine(root,"font-mode.txt")) ? "DIALOGUE_FONT_RUNTIME_OK" : File.Exists(Path.Combine(root,"controls-mode.txt")) ? "DIALOGUE_CONTROLS_RUNTIME_OK" : File.Exists(Path.Combine(root,"preview-mode.txt")) ? "DIALOGUE_LOAD_UI_PREVIEW_OK" : "DIALOGUE_ISOLATED_RUNTIME_OK");
         if(!failed && File.Exists(Path.Combine(root,"preview-mode.txt"))) yield break;
         yield return new WaitForSecondsRealtime(2);Application.Quit();
     }
+    static bool SkipFixtureWarning()=>false;
     void OnDestroy(){log?.LogInfo("QA_DRIVER_DESTROYED");}
     void Update(){RuntimeControlsQA.ObserveFrame(Time.unscaledDeltaTime);}
     IEnumerator Run()
@@ -82,6 +83,9 @@ public sealed class DialogueQaDriver:MonoBehaviour
         ClickNativeManual();yield return new WaitForSecondsRealtime(.3f);
         Check(((SaveView)UIMgr.GetView<SaveView>()).tabgroup_top.GetCells().Count==3,"ordinary three load tabs preserved");
         UIMgr.CloseView<SaveView>();
+        // Fixture dependencies are historical test data. Stop its asynchronous Steam
+        // title lookup before loading, so a late warning cannot cover QA screenshots.
+        new Harmony("dialogue.qa.fixture-mods").Patch(AccessTools.Method(typeof(ProfileMgr),"ValidateModList"),prefix:new HarmonyMethod(typeof(DialogueQaDriver),nameof(SkipFixtureWarning)));
         bool done=false,loaded=false;SaveMgrEx.LoadAynsc(root,"fixture.save",16,ok=>{done=true;loaded=ok;});
         yield return Until(()=>done,30,"isolated fixture loaded");Check(loaded,"fixture decoding succeeded");
         // This fixture is synthetic QA data from an earlier test project, never a live player save.
@@ -146,6 +150,25 @@ public sealed class DialogueQaDriver:MonoBehaviour
         if(File.Exists(Path.Combine(root,"adv-only.txt")))gameObject.AddComponent<AdvFirstFrameQA>();
         evt.EnqueueEvt(0,1);evt.ShowNewRoundEvent();
         yield return Until(()=>adapter.IsSupportedDialogueContext,20,"native queued dialogue tracked");
+        if(File.Exists(Path.Combine(root,"presentation-visual.txt")))
+        {
+            yield return RuntimePresentationQA.Visual(adapter,Check,Until,root);yield break;
+        }
+        if(File.Exists(Path.Combine(root,"presentation-mode.txt")))
+        {
+            yield return RuntimePresentationQA.Run(adapter,ui,service,Check,Until,root);
+            yield break;
+        }
+        if(File.Exists(Path.Combine(root,"feedback-mode.txt")))
+        {
+            yield return RuntimeFeedbackQA.Run(adapter,Check,Until,root);
+            yield break;
+        }
+        if(File.Exists(Path.Combine(root,"hotfix-mode.txt")))
+        {
+            yield return RuntimeHotfixQA.Run(adapter,ui,service,Check,Until,root);
+            yield break;
+        }
         if(File.Exists(Path.Combine(root,"adv-mode.txt")))
         {
             if(File.Exists(Path.Combine(root,"adv-only.txt")))yield return RuntimeAdvQA.Preview(adapter,service,Check,Until,root);

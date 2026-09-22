@@ -62,6 +62,11 @@ namespace StudentAgeDialogueSave.UI
         int consumedFrame=-1;
         string optionSignature,name;
         internal bool IsAdv=>preference.Value=="ADV";
+        internal bool UsesAdv(NewTalkView view)=>IsAdv && view!=null && !IsComic(view);
+        internal bool OwnsPresentation=>talk!=null && UsesAdv(talk);
+        internal bool PresentationVisible=>canvas!=null && canvas.activeSelf;
+        bool transitionPending;
+        bool Transition=>transitionPending || DialoguePresentationPolicy.IsTransition(talk);
         internal bool ModalOpen=>modal!=null;
         internal bool BlocksActions=>ModalOpen || hidden;
         internal DialogueHistory History=>history;
@@ -71,7 +76,12 @@ namespace StudentAgeDialogueSave.UI
         internal double TickMilliseconds {get;private set;}
         internal bool IsCgPresentation=>dark;
         internal bool LastAttachedBeforeReady {get;private set;}
-        internal void LatePresentation(){if(!disposed && talk!=null && canvas!=null)SyncReadingSurface();}
+        internal void LatePresentation()
+        {
+            if(disposed || talk==null || canvas==null)return;
+            if(Transition){canvas.SetActive(false);return;}
+            if(canvas.activeSelf)SyncReadingSurface();
+        }
         static readonly System.Reflection.FieldInfo CfgField=AccessTools.Field(typeof(NewTalkView),"cfg"),
             AutoField=AccessTools.Field(typeof(NewTalkView),"enableAutoTalk"),TypeField=AccessTools.Field(typeof(NewTalkView),"talkType"),
             CgField=AccessTools.Field(typeof(NewTalkView),"isShowingCG");
@@ -90,18 +100,21 @@ namespace StudentAgeDialogueSave.UI
             skipConfirmation=preference.ConfigFile.Bind("Interface","ConfirmStorySkip",true,"跳过剧情前显示确认；可在确认框选择不再提示。");
             rollbackConfirmation=preference.ConfigFile.Bind("Interface","ConfirmHistoryJump",true,"跳转对话前显示确认；可在确认框选择不再提示。");
             history=new DialogueHistory(adapter,shutdown,log);Active=this;
-            adapter.PresentationTextSpeed=speed=>IsAdv && speed<=0?30:speed;
+            adapter.PresentationTextSpeed=speed=>OwnsPresentation && speed<=0?30:speed;
             adapter.BeforePresentationRebuild=Detach;
-            adapter.PreparingPresentation=view=>{if(IsAdv){if(!ReferenceEquals(talk,view)){Detach();Attach(view);}SyncReadingSurface();}};
+            adapter.PreparingPresentation=view=>{if(UsesAdv(view)){if(!ReferenceEquals(talk,view)){Detach();Attach(view);}transitionPending=false;SyncReadingSurface();}};
             harmony.Patch(AccessTools.Method(typeof(BaseView),"HotKeyInput"),prefix:new HarmonyMethod(typeof(AdvDialogueController),nameof(GlobalKeyPrefix)));
             harmony.Patch(AccessTools.Method(typeof(NewTalkView),"OnClickHistory"),prefix:new HarmonyMethod(typeof(AdvDialogueController),nameof(HistoryPrefix)));
             harmony.Patch(AccessTools.Method(typeof(NewTalkView),"DoText"),prefix:new HarmonyMethod(typeof(AdvDialogueController),nameof(TextStarting)),postfix:new HarmonyMethod(typeof(AdvDialogueController),nameof(TextChanged)),finalizer:new HarmonyMethod(typeof(AdvDialogueController),nameof(TextFinished)));
+            foreach(var method in new[]{"WaitBg","BlackBg","BlackBg2"})
+                harmony.Patch(AccessTools.Method(typeof(NewTalkView),method),prefix:new HarmonyMethod(typeof(AdvDialogueController),nameof(TransitionStarting)));
             harmony.Patch(NextMethod,prefix:new HarmonyMethod(typeof(AdvDialogueController),nameof(AdvancePrefix)));
             harmony.Patch(AccessTools.Method(typeof(NewTalkView),"OnHotKeyInput"),prefix:new HarmonyMethod(typeof(AdvDialogueController),nameof(KeyPrefix)));
             harmony.Patch(AccessTools.Method(typeof(NewTalkView),"OnOpen"),postfix:new HarmonyMethod(typeof(AdvDialogueController),nameof(TalkOpened)));
             harmony.Patch(AccessTools.Method(typeof(NewTalkView),"RefreshTalk",new[]{typeof(int),typeof(bool)}),prefix:new HarmonyMethod(typeof(AdvDialogueController),nameof(TalkStarting)));
             harmony.Patch(AccessTools.Method(typeof(NewTalkView),"ShowOption"),postfix:new HarmonyMethod(typeof(AdvDialogueController),nameof(HistoryBoundary)));
             harmony.Patch(AccessTools.Method(typeof(NewTalkView),"NextTalk"),prefix:new HarmonyMethod(typeof(AdvDialogueController),nameof(HistoryBoundary)));
+            harmony.Patch(AccessTools.Method(typeof(NewTalkView),"ShowComic"),prefix:new HarmonyMethod(typeof(AdvDialogueController),nameof(ComicStarting)),postfix:new HarmonyMethod(typeof(AdvDialogueController),nameof(ComicStarted)));
             harmony.Patch(AccessTools.Method(typeof(SettingView),"OnOpen"),postfix:new HarmonyMethod(typeof(AdvDialogueController),nameof(SettingsOpened)));
         }
         static bool GlobalKeyPrefix(int _hotKey,ref bool __result)
@@ -112,10 +125,10 @@ namespace StudentAgeDialogueSave.UI
             if((_hotKey==108 || _hotKey==121) && a.preference.Value!="Ask")a.CloseModal();
             __result=true;return false;
         }
-        static bool HistoryPrefix(){if(Active?.IsAdv!=true)return true;Active.OpenHistory();return false;}
+        static bool HistoryPrefix(){if(Active?.OwnsPresentation!=true)return true;Active.OpenHistory();return false;}
         static bool AdvancePrefix()
         {
-            var a=Active;if(a==null || !a.IsAdv)return true;
+            var a=Active;if(a==null || !a.OwnsPresentation)return true;
             if(a.HandleSpace())return false;
             if(a.hidden){a.ToggleHidden();a.consumedFrame=Time.frameCount;return false;}
             bool advance=!a.ModalOpen && a.consumedFrame!=Time.frameCount;
@@ -127,7 +140,7 @@ namespace StudentAgeDialogueSave.UI
             var a=Active;if(a==null)return true;
             if(a.HandleEscape()){__result=true;return false;}
             if(a.ModalOpen){if(_keyAction==108 || _keyAction==121)a.CloseModal();__result=true;return false;}
-            if(!a.IsAdv)return true;
+            if(!a.OwnsPresentation)return true;
             if(a.HandleSpace()){__result=true;return false;}
             if(a.hidden){if(_keyAction==126 || _keyAction==120 || _keyAction==108)a.ToggleHidden();__result=true;return false;}
             if(_keyAction==126){a.ToggleHidden();__result=true;return false;}
@@ -149,7 +162,7 @@ namespace StudentAgeDialogueSave.UI
         }
         internal bool HandleSpace()
         {
-            if(!IsAdv || talk==null || Keyboard.current==null)return false;
+            if(!OwnsPresentation || talk==null || Keyboard.current==null)return false;
             var space=Keyboard.current.spaceKey;
             if(!space.wasPressedThisFrame && !space.wasReleasedThisFrame)return false;
             if(ModalOpen)return true;
@@ -164,29 +177,41 @@ namespace StudentAgeDialogueSave.UI
         }
         static void TalkOpened(NewTalkView __instance)
         {
-            var a=Active;if(a?.IsAdv!=true || ReferenceEquals(a.talk,__instance) ||
+            var a=Active;if(a==null || !a.UsesAdv(__instance) || ReferenceEquals(a.talk,__instance) ||
                 (NewTalkType)TypeField.GetValue(__instance)!=NewTalkType.Talk)return;
             a.Detach();a.Attach(__instance);
         }
-        static void TalkStarting(NewTalkView __instance)
+        static void TalkStarting(NewTalkView __instance,bool __runOriginal)
         {
-            var a=Active;if(a?.IsAdv!=true || ReferenceEquals(a.talk,__instance) || __instance.txtex_content==null)return;
+            var a=Active;if(a==null || !__runOriginal || !a.adapter.CanAdvancePresentation(__instance))return;
+            if(!a.UsesAdv(__instance)){if(ReferenceEquals(a.talk,__instance))a.Detach();a.saves.RefreshActions();return;}
+            a.transitionPending=true;if(a.canvas!=null)a.canvas.SetActive(false);
+            if(ReferenceEquals(a.talk,__instance) || __instance.txtex_content==null)return;
             // Native RefreshTalk can spend several frames loading art before marking
             // the view ready. Own presentation before any of those frames can render.
             a.Detach();a.Attach(__instance);
         }
         static void TextStarting(NewTalkView __instance,string txt,out float? __state)
         {
-            __state=null;var a=Active;if(a?.IsAdv!=true)return;
+            __state=null;var a=Active;if(a==null || !a.UsesAdv(__instance))return;
+            // A comic can end inside RefreshTalk after its prefix. Reattach before
+            // DoText draws the next normal/CG line, not at the periodic discovery tick.
+            if(!ReferenceEquals(a.talk,__instance) && __instance.txtex_content!=null)
+            {a.Detach();a.Attach(__instance);}
             // Keep native typing, end effects and the click-to-complete state machine.
             // ADV's default cannot inherit the original mode's instant-text setting.
             float speed=(float)SpeedField.GetValue(__instance);
             if(speed<=0){__state=speed;SpeedField.SetValue(__instance,30f);}
-            if(ReferenceEquals(a.talk,__instance)){a.fullLine=txt;a.positionedLine=null;}
+            if(ReferenceEquals(a.talk,__instance)){a.transitionPending=false;a.fullLine=txt;a.positionedLine=null;}
         }
         static Exception TextFinished(NewTalkView __instance,float? __state,Exception __exception)
         {if(__state.HasValue)SpeedField.SetValue(__instance,__state.Value);return __exception;}
-        static void HistoryBoundary(NewTalkView __instance){Active?.history.Tick(__instance);}
+        static void HistoryBoundary(NewTalkView __instance){if(Active?.UsesAdv(__instance)==true)Active.history.Tick(__instance);}
+        static void TransitionStarting(NewTalkView __instance)
+        {
+            var a=Active;a?.saves.SuspendDialogueControls();
+            if(a!=null && ReferenceEquals(a.talk,__instance)){a.transitionPending=true;a.canvas?.SetActive(false);}
+        }
         static void TextChanged(NewTalkView __instance)
         {
             if(ReferenceEquals(Active?.talk,__instance))Active.SyncReadingSurface();
@@ -196,8 +221,8 @@ namespace StudentAgeDialogueSave.UI
 
         internal void Tick()
         {
-            var watch=System.Diagnostics.Stopwatch.StartNew();
-            try{TickCore();}finally{TickMilliseconds=watch.Elapsed.TotalMilliseconds;}
+            long start=System.Diagnostics.Stopwatch.GetTimestamp();
+            try{TickCore();}finally{TickMilliseconds=(System.Diagnostics.Stopwatch.GetTimestamp()-start)*1000.0/System.Diagnostics.Stopwatch.Frequency;}
         }
         void TickCore()
         {
@@ -217,7 +242,7 @@ namespace StudentAgeDialogueSave.UI
                     UIMgr.GetView<EntryView>(false)?.isViewReady==true)
                 {firstPrompt=true;OpenPicker(true);}
                 var view=UIMgr.GetView<NewTalkView>(false) as NewTalkView;
-                bool supported=IsAdv && view?.gameObject!=null && view.viewState==ViewState.Opened &&
+                bool supported=UsesAdv(view) && view?.gameObject!=null && view.viewState==ViewState.Opened &&
                     (NewTalkType)TypeField.GetValue(view)==NewTalkType.Talk;
                 if(supported && !ReferenceEquals(view,talk)){Detach();Attach(view);}
                 else if(!supported && talk!=null)Detach();
@@ -225,14 +250,13 @@ namespace StudentAgeDialogueSave.UI
                 if(setting?.isViewReady==true && settingsButton==null)AttachSettings(setting);
             }
             if(talk==null || canvas==null)return;
-            bool visible=UIMgr.GetTopView(ViewType.Guide,ViewType.Side)==talk && !adapter.IsRestoring;
+            bool visible=UIMgr.GetTopView(ViewType.Guide,ViewType.Side)==talk && !adapter.IsRestoring && !Transition;
             canvas.SetActive(visible && (!ModalOpen || modalKeepsDialogue) && !hidden);
             if(ModalOpen)
             {
                 return;
             }
             if(!visible)return;
-            SyncReadingSurface();
             for(int i=0;i<icons.Count;i++)
             {
                 bool active=(icons[i].Symbol==5 && (bool)AutoField.GetValue(talk)) || (icons[i].Symbol==6 && skipping);
@@ -272,7 +296,7 @@ namespace StudentAgeDialogueSave.UI
         void Attach(NewTalkView view)
         {
             LastAttachedBeforeReady=!view.isViewReady;
-            talk=view;font=AdvWidgets.ReadingFont(view.txtex_content.font,true);fullLine=view.tmpTalks!=null && view.tmpTalkIdx>=0 && view.tmpTalkIdx<view.tmpTalks.Count?view.tmpTalks[view.tmpTalkIdx]:view.txtex_content.text;
+            talk=view;transitionPending=DialoguePresentationPolicy.IsTransition(view);font=AdvWidgets.ReadingFont(view.txtex_content.font,true);fullLine=view.tmpTalks!=null && view.tmpTalkIdx>=0 && view.tmpTalkIdx<view.tmpTalks.Count?view.tmpTalks[view.tmpTalkIdx]:view.txtex_content.text;
             nextHistory=Time.unscaledTime+.35f;
             canvas=AdvWidgets.Canvas("DialogueSave.ADV",29000);
             var root=AdvWidgets.Rect("Frame",canvas.transform,0,0,1920,1080);
@@ -318,7 +342,7 @@ namespace StudentAgeDialogueSave.UI
             foldIcon.rectTransform.localEulerAngles=new Vector3(0,0,folded?180:0);icons.Add(foldIcon);
             var foldHint=fold.gameObject.AddComponent<AdvHint>();foldHint.Show=show=>{if(hintLabel!=null)hintLabel.text=show?(folded?"展开操作栏 · T":"收起操作栏 · T"):"";};
             choiceRoot=AdvWidgets.Rect("Choices",root,0,0,1920,760).gameObject;
-            toolbar.SetActive(!folded);name=null;optionSignature=null;dark=false;SyncReadingSurface();
+            toolbar.SetActive(!folded);name=null;optionSignature=null;dark=false;SyncReadingSurface();saves.RefreshActions();
         }
         Action MoveText(TextMeshProUGUI text,Transform parent)
         {
@@ -326,7 +350,9 @@ namespace StudentAgeDialogueSave.UI
             var amin=r.anchorMin;var amax=r.anchorMax;var pivot=r.pivot;var pos=r.anchoredPosition;var size=r.sizeDelta;var scale=r.localScale;
             var color=text.color;var originalFont=text.font;var originalMaterial=text.fontSharedMaterial;bool originalGradient=text.enableVertexGradient;float fs=text.fontSize;var align=text.alignment;var overflow=text.overflowMode;
             bool auto=text.enableAutoSizing, raycast=text.raycastTarget;float spacing=text.lineSpacing;
-            Action restore=()=>{if(text==null || oldParent==null)return;r.SetParent(oldParent,false);r.SetSiblingIndex(sibling);
+            var fitter=text.GetComponent<ContentSizeFitter>();bool fitEnabled=fitter!=null && fitter.enabled;
+            if(fitter!=null)fitter.enabled=false;
+            Action restore=()=>{if(text==null || oldParent==null)return;if(fitter!=null)fitter.enabled=fitEnabled;r.SetParent(oldParent,false);r.SetSiblingIndex(sibling);
                 r.anchorMin=amin;r.anchorMax=amax;r.pivot=pivot;r.anchoredPosition=pos;r.sizeDelta=size;r.localScale=scale;
                 text.font=originalFont;text.fontSharedMaterial=originalMaterial;text.enableVertexGradient=originalGradient;text.color=color;text.fontSize=fs;text.alignment=align;text.overflowMode=overflow;text.enableAutoSizing=auto;text.lineSpacing=spacing;text.raycastTarget=raycast;};
             r.SetParent(parent,false);r.anchorMin=r.anchorMax=new Vector2(0,1);r.pivot=new Vector2(0,1);
@@ -353,15 +379,22 @@ namespace StudentAgeDialogueSave.UI
             if(index>=1 && index<=4)return names[index]+" · "+saves.KeyLabel((DialogueHotkeyAction)(index-1));
             return names[index];
         }
+        internal static bool IsComic(NewTalkView view) => view!=null && (bool)ComicField.GetValue(view);
+        static void ComicStarting(){if(Active?.talk!=null)Active.Detach();}
+        static void ComicStarted(){Active?.saves.RefreshActions();}
+        static readonly System.Reflection.FieldInfo ComicField=AccessTools.Field(typeof(NewTalkView),"isShowingComic");
         void SyncReadingSurface()
         {
             if(talk==null || bodyRoot==null)return;
+            if(IsComic(talk)){Detach();return;}
             var nativeNext=NextObjectMethod.Invoke(talk,null) as RectTransform;
             if(nativeNext!=null)HideGroup(nativeNext.gameObject);
             var actual=TextMethod.Invoke(talk,null) as TextMeshProUGUI;
             if(actual!=null && actual!=shownText)
             {
                 restoreText?.Invoke();shownText=actual;restoreText=MoveText(actual,bodyRoot.transform);
+                // Comic names are children of the moved text; hide their original graphics too.
+                foreach(var label in actual.GetComponentsInChildren<UnityEngine.UI.Text>(true))HideGroup(label.gameObject);
                 var group=TalkGroupMethod.Invoke(talk,null) as GameObject;
                 if(group!=null && group!=actual.gameObject)HideGroup(group);
             }
@@ -441,7 +474,9 @@ namespace StudentAgeDialogueSave.UI
             if(!ready || shownText==null)return;
             if(positionedText!=shownText || positionedLine!=shownText.text || positionedDark!=dark || shownText.havePropertiesChanged)
             {
-                shownText.ForceMeshUpdate();
+                // TMP rebuilds dirty text during the normal canvas pass. Read that
+                // mesh next frame rather than forcing a second rebuild on click-end.
+                if(shownText.havePropertiesChanged)return;
                 for(int i=shownText.textInfo.characterCount-1;i>=0;i--)
                 {
                     var c=shownText.textInfo.characterInfo[i];if(!c.isVisible)continue;
@@ -471,19 +506,23 @@ namespace StudentAgeDialogueSave.UI
             for(int i=0;i<cells.Count;i++)
             {
                 var cell=cells[i];var data=cell.data as CommonEvtOptionData;
-                var label=cell.gameObject.GetComponentsInChildren<TextMeshProUGUI>(true).FirstOrDefault(t=>!string.IsNullOrEmpty(t.text));
+                var nativeCell=cell as GenUI.Common.Cell_CommonOptionItemUI;
+                var native=nativeCell?.btn_click;
+                var label=nativeCell?.txtex_content;
                 string caption=label?.text??(Cfg.OptionCfgMap.TryGetValue(data.id,out var cfg)?cfg.content:"选项");
                 var b=AdvWidgets.Button("ADV.Choice."+i,choiceRoot.transform,font,caption,460,start+i*88,1000,68,()=>
                 {
                     if(talk==null || talk.talkState!=TalkState.Option || ModalOpen)return;
-                    var native=cell.gameObject.GetComponentsInChildren<Button>(true).FirstOrDefault(x=>x.interactable);
-                    if(native!=null)native.onClick.Invoke();
+                    if(native?.btn!=null && native.interactable && ReferenceEquals(cell.data,data))native.btn.onClick.Invoke();
                 },true,true);
                 var captionText=b.GetComponentInChildren<TextMeshProUGUI>();captionText.fontSize=27;
+                // These captions contain native/Mod TMP formatting, unlike toolbar labels.
+                captionText.richText=true;
                 captionText.rectTransform.anchoredPosition=new Vector2(160,0);
                 captionText.rectTransform.sizeDelta=new Vector2(680,68);
                 captionText.enableWordWrapping=true;captionText.enableAutoSizing=true;captionText.fontSizeMin=21;captionText.fontSizeMax=27;
                 AdvWidgets.ThemeButton(b,true,dark);optionRows[i]=b.gameObject;
+                b.gameObject.AddComponent<AdvChoiceBinding>().Bind(b,native);
             }
         }
         internal void ToggleToolbar(){folded=!folded;if(toolbar!=null)toolbar.SetActive(!folded);
@@ -566,7 +605,7 @@ namespace StudentAgeDialogueSave.UI
             if(mode!="Original" && mode!="ADV")throw new ArgumentException(nameof(mode));
             preference.Value=mode;CloseModal();Detach();preference.ConfigFile.Save();nextScan=0;saves.RefreshActions();
             var view=UIMgr.GetView<NewTalkView>(false) as NewTalkView;
-            if(mode=="ADV" && view?.gameObject!=null && view.viewState==ViewState.Opened && (NewTalkType)TypeField.GetValue(view)==NewTalkType.Talk)Attach(view);
+            if(UsesAdv(view) && view?.gameObject!=null && view.viewState==ViewState.Opened && (NewTalkType)TypeField.GetValue(view)==NewTalkType.Talk)Attach(view);
         }
         internal void OpenPicker(bool first)
         {
@@ -606,7 +645,7 @@ namespace StudentAgeDialogueSave.UI
         }
         internal void OpenHistory()
         {
-            if(!IsAdv || talk==null || ModalOpen || hidden)return;skipping=false;
+            if(!OwnsPresentation || talk==null || ModalOpen || hidden)return;skipping=false;
             history.Tick(talk);
             CreateModal(true);
             modal.transform.Find("Shade").GetComponent<Image>().color=Color.clear;
@@ -635,6 +674,7 @@ namespace StudentAgeDialogueSave.UI
         async void Rollback(int index)
         {
             if(history.Restoring)return;
+            skipping=false;sceneSkipPending=false;
             try
             {
                 await history.Restore(index);
@@ -643,7 +683,7 @@ namespace StudentAgeDialogueSave.UI
                 if(!ReferenceEquals(talk,restored))
                 {
                     Detach();
-                    if(IsAdv && restored?.gameObject!=null && restored.viewState==ViewState.Opened &&
+                    if(UsesAdv(restored) && restored?.gameObject!=null && restored.viewState==ViewState.Opened &&
                         (NewTalkType)TypeField.GetValue(restored)==NewTalkType.Talk)Attach(restored);
                 }
                 nextScan=0;

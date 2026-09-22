@@ -9,6 +9,8 @@ if (directory.Name != "runtime" || directory.Parent?.Name != "qa" || project == 
     !File.Exists(Path.Combine(project, "tools", "prepare_qa.py")))
     throw new Exception("This repository's qa/runtime directory is required");
 string data="Z:"+root.Replace('/','\\')+"\\data";
+bool release=args.Contains("--steam-release");
+var allowedUgc = new HashSet<string>{"CreateItem","SubmitItemUpdate","SetItemTitle","SetItemDescription","SetItemContent","SetItemPreview","SetItemVisibility","SubscribeItem","DownloadItem"};
 var report=new List<string>();
 var resolver=new DefaultAssemblyResolver();
 resolver.AddSearchDirectory(Path.Combine(root,"StudentAge_Data/Managed"));
@@ -31,6 +33,7 @@ foreach(var path in paths)
            (type.Name=="SteamRemoteStorage" && (method.Name.StartsWith("FileWrite") || method.Name.StartsWith("FileDelete") || method.Name.StartsWith("FileForget") || method.Name.StartsWith("FileShare") || method.Name.StartsWith("SetSync") || method.Name.StartsWith("SetCloud"))) ||
            (type.Name=="SteamUGC" && (method.Name.StartsWith("DownloadItem") || method.Name.StartsWith("SubscribeItem") || method.Name.StartsWith("UnsubscribeItem") || method.Name.StartsWith("CreateItem") || method.Name.StartsWith("SubmitItem") || method.Name.StartsWith("SetItem") || method.Name.StartsWith("DeleteItem") || method.Name.StartsWith("SetUserItemVote"))) ||
            (type.Name=="SteamFriends" && (method.Name=="SetRichPresence" || method.Name=="ClearRichPresence")));
+        if(release && type.Name=="SteamUGC" && allowedUgc.Contains(method.Name)) steamWrite=false;
         if(steamWrite)
         {
             method.Body=new MethodBody(method);var il=method.Body.GetILProcessor();
