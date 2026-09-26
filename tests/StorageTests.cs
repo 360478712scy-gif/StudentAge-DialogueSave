@@ -94,8 +94,10 @@ internal static class StorageTests
         var stamp=File.GetLastWriteTimeUtc(path);string contents=File.ReadAllText(path);
         int at=contents.IndexOf("测试角色",StringComparison.Ordinal);Check(at>=0,"same-length tamper fixture exists");
         File.WriteAllText(path,contents.Replace("测试角色","篡改角色"));File.SetLastWriteTimeUtc(path,stamp);
-        Check(cold.Scan().Single(r=>r.FilePath==path).Status!=SaveStatus.Ready && cold.LastScanDecodedFiles>0,"same-size same-time external change cannot hit verified cache");
-        Reject(()=>cold.Load(id),"load rejects tampered cached revision");
+        // Listing trusts an unchanged stamp of an immutable revision; restoring never does.
+        Reject(()=>cold.Load(id),"load rejects tampered cached revision even when size and time match");
+        File.SetLastWriteTimeUtc(path,stamp.AddSeconds(3));
+        Check(cold.Scan().Single(r=>r.FilePath==path).Status!=SaveStatus.Ready && cold.LastScanDecodedFiles>0,"rewritten revision with new stamp is decoded again");
         Console.WriteLine($"SCAN_PERF files=12 cold_ms={coldMs:F1} warm_ms={warmMs:F1}");
     }
     private static void VerifyArchiveOverwrite()
@@ -174,6 +176,86 @@ internal static class StorageTests
         var linkedLayout=(JObject)layout.DeepClone();linkedLayout["slots"]["9"]="linked.save";
         Reject(()=>NativeSlotEdits.Apply(nativeDir,backup,NativeSlotEdits.Fingerprint(index),linkedLayout,"note",9,9,"bad"),"native linked file rejected");
     }
+
+    private static Repository Pruning(string name)
+    {
+        string root = Path.Combine(_root, name);
+        return new Repository(Path.Combine(root, "Saves"), Path.Combine(root, "Staging"), Path.Combine(root, "Backups"), retainLocalCopies:true, pruneSuperseded:true);
+    }
+    private static SaveRecord Next(Repository repo, SaveRecord parent, string slot = "slot-1", string run = "run-a")
+    {
+        var item = Sample(slot: slot, run: run);
+        if (parent != null) item.Header.ParentRevisionIds = new[] { parent.Header.RevisionId };
+        return repo.PublishChecked(item);
+    }
+    private static string[] Bodies(string name) => Directory.GetFiles(Path.Combine(_root, name, "Saves"), "dialogue_*.dsav").Select(Path.GetFileName).OrderBy(x=>x).ToArray();
+    private static void VerifyPruning()
+    {
+        var repo = Pruning("prune-chain");
+        var a = Next(repo, null); var b = Next(repo, a); var c = Next(repo, b);
+        var other = Next(repo, null, slot: "slot-2");
+        string root = Path.Combine(_root, "prune-chain");
+        Check(Bodies("prune-chain").SequenceEqual(new[]{Path.GetFileName(c.FilePath),Path.GetFileName(other.FilePath)}.OrderBy(x=>x)),"overwrite keeps only the newest body of each slot");
+        Check(Directory.GetFiles(Path.Combine(root,"Backups","Pruned")).Length==2 && !File.Exists(Path.Combine(root,"Backups","Retained",Path.GetFileName(a.FilePath))),"reclaimed bodies go to bounded local trash and their local copies are dropped");
+        var heads = Repository.FindHeads(repo.Scan());
+        Check(heads.Count==2 && heads.Any(h=>h.Header.RevisionId==c.Header.RevisionId) && heads.All(h=>!h.IsConflict),"visible saves unchanged by reclamation");
+        Check(repo.Load(c.Header.RevisionId).World.SequenceEqual(Sample().World),"newest save still loads completely");
+        // A stale local copy of a reclaimed revision is not restored into the cloud folder.
+        File.Copy(Directory.GetFiles(Path.Combine(root,"Backups","Pruned")).First(),Path.Combine(root,"Backups","Retained",Path.GetFileName(a.FilePath)));
+        repo.Scan();
+        Check(!File.Exists(a.FilePath),"reclaimed revision is not resurrected from a local copy");
+        // Deleting after reclamation still writes a complete ancestry marker.
+        repo.Delete(c.Header.RevisionId);
+        var marker = repo.Scan().Single(r=>r.Status==SaveStatus.Deleted && r.Header.LogicalSlot=="slot-1");
+        Check(new[]{a,b,c}.All(x=>marker.Header.ParentRevisionIds.Contains(x.Header.RevisionId)) && !Repository.FindHeads(repo.Scan()).Any(r=>r.Header.LogicalSlot=="slot-1"),"deletion after reclamation covers reclaimed ancestry");
+        File.Copy(Directory.GetFiles(Path.Combine(root,"Backups","Pruned")).OrderBy(x=>x).Last(),b.FilePath);
+        Check(!Repository.FindHeads(repo.Scan()).Any(r=>r.Header.LogicalSlot=="slot-1"),"reclaimed ancestor arriving again cannot resurrect a deleted save");
+
+        var branches = Pruning("prune-branches");
+        var root2 = Next(branches, null); var left = Next(branches, root2);
+        var rightItem = Sample(); rightItem.Header.ParentRevisionIds = new[]{root2.Header.RevisionId}; var right = branches.Publish(rightItem); // another device's branch
+        heads = Repository.FindHeads(branches.Scan());
+        Check(heads.Count==2 && heads.All(h=>h.IsConflict) && File.Exists(left.FilePath) && File.Exists(right.FilePath) && !File.Exists(root2.FilePath),"device branches both survive; only their shared replaced parent is reclaimed");
+
+        // A damaged covering child is no evidence: nothing may be reclaimed.
+        var keepRoot = Pruning("prune-damaged-2");
+        var p2 = Next(keepRoot, null);
+        var c2item = Sample(); c2item.Header.ParentRevisionIds = new[]{p2.Header.RevisionId};
+        var plain = new Repository(Path.Combine(_root,"prune-damaged-2","Saves"),Path.Combine(_root,"prune-damaged-2","Staging"),Path.Combine(_root,"prune-damaged-2","Backups"));
+        var c2 = plain.PublishChecked(c2item);
+        string text = File.ReadAllText(c2.FilePath); File.WriteAllText(c2.FilePath, text.Replace("测试角色","篡改角色"));
+        keepRoot.Scan();
+        Check(File.Exists(p2.FilePath) && File.Exists(c2.FilePath),"corrupt descendant never justifies reclaiming its parent");
+
+        var foreign = Pruning("prune-foreign");
+        var orphanItem = Sample(); orphanItem.Header.ParentRevisionIds = new[]{Guid.NewGuid().ToString("N")};
+        var orphan = foreign.Publish(orphanItem);
+        foreign.Delete(orphan.Header.RevisionId);
+        Check(!Repository.FindHeads(foreign.Scan()).Any(),"ancestor already reclaimed on another device does not block deletion");
+
+        var tx = Pruning("prune-transactions");
+        var s1 = Next(tx, null, slot:"1"); var s2 = Next(tx, null, slot:"2");
+        tx.EditSlots("note", s1.Header.RevisionId, "1", s1.Header.RevisionId, "备注");
+        var noted = Repository.FindHeads(tx.Scan()).Single(r=>r.Header.LogicalSlot=="1");
+        Check(!File.Exists(s1.FilePath),"note revision reclaims the replaced plain body");
+        tx.EditSlots("swap", noted.Header.RevisionId, "2", s2.Header.RevisionId);
+        var swapped = Repository.FindHeads(tx.Scan());
+        Check(File.Exists(noted.FilePath) && File.Exists(s2.FilePath),"bodies replaced by an exchange transaction are kept");
+        string txDir = Path.GetDirectoryName(noted.FilePath), receiptPath = Path.Combine(txDir,"dialogue_tx_"+swapped.First().Header.TransactionId+".commit");
+        File.Delete(receiptPath); File.Delete(Path.Combine(_root,"prune-transactions","Backups","Transactions",swapped.First().Header.TransactionId+".commit"));
+        heads = Repository.FindHeads(tx.Scan());
+        Check(heads.Any(r=>r.Header.RevisionId==noted.Header.RevisionId) && heads.Any(r=>r.Header.RevisionId==s2.Header.RevisionId),"lost exchange receipt still falls back to both original saves");
+
+        var many = Pruning("prune-trash");
+        SaveRecord last = null; for (int i = 0; i < 60; i++) last = Next(many, last);
+        Check(Bodies("prune-trash").Length==1 && Directory.GetFiles(Path.Combine(_root,"prune-trash","Backups","Pruned")).Length==40,"long autosave history keeps one body and a bounded trash");
+        var clock = Stopwatch.StartNew(); for (int i = 0; i < 20; i++) last = Next(many, last);
+        Console.WriteLine($"PRUNED_SAVE_PERF saves=20 ms={clock.Elapsed.TotalMilliseconds:F1}");
+        var legacy = Repo("prune-upgrade"); SaveRecord old = null; for (int i = 0; i < 10; i++) old = Next(legacy, old);
+        Check(Bodies("prune-upgrade").Length==10,"legacy repository kept every replaced body");
+        var upgraded = new Repository(Path.Combine(_root,"prune-upgrade","Saves"),Path.Combine(_root,"prune-upgrade","Staging"),Path.Combine(_root,"prune-upgrade","Backups"),retainLocalCopies:true,pruneSuperseded:true); upgraded.Scan();
+        Check(Bodies("prune-upgrade").SequenceEqual(new[]{Path.GetFileName(old.FilePath)}) && upgraded.LastPrunedFiles==9 && upgraded.Load(old.Header.RevisionId)!=null,"first upgraded scan reclaims accumulated history and keeps the loadable head");
+    }
     private static void Main(string[] args)
     {
         if (args.Length > 0 && args[0] == "publish-worker") { PublishWorker(args); return; }
@@ -184,6 +266,7 @@ internal static class StorageTests
         if(args.Contains("--archive-edits")){Console.WriteLine("ARCHIVE_TESTS_OK "+_count);return;}
         VerifyLocalCopies();
         VerifyScanCache();
+        VerifyPruning();
         var repo = Repo("basic");
         var original = Sample();
         var first = repo.Publish(original);

@@ -74,7 +74,7 @@ namespace StudentAgeDialogueSave
                 if (busy || IsListing) { reason = "正在处理上一账户的存档，请稍候。"; return false; }
                 string user = Platform.Current.GetUserId();
                 string basePath = Path.Combine(Application.persistentDataPath, "DialogueSaveLocal", user);
-                var nextRepository = new Repository(path, Path.Combine(basePath, "Staging"), Path.Combine(basePath, "Backups"), retainLocalCopies: true, diagnostics: SafeLog);
+                var nextRepository = new Repository(path, Path.Combine(basePath, "Staging"), Path.Combine(basePath, "Backups"), retainLocalCopies: true, diagnostics: SafeLog, pruneSuperseded: true);
                 string idPath = Path.Combine(basePath, "device-id.txt");
                 Directory.CreateDirectory(basePath);
                 string nextDeviceId;

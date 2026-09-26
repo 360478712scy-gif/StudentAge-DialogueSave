@@ -20,7 +20,7 @@ namespace StudentAgeDialogueSave.Storage
         private readonly bool _retainLocalCopies;
         private readonly Action<string> _diagnostics;
         private readonly object _gate = new object();
-        sealed class VerifiedRow { internal string Hash; internal SaveRecord Record; }
+        sealed class VerifiedRow { internal string Hash; internal long Length, WriteTicks; internal SaveRecord Record; }
         readonly Dictionary<string,VerifiedRow> verifiedRows=new Dictionary<string,VerifiedRow>(StringComparer.Ordinal);
         internal int LastScanDecodedFiles {get;private set;}
         internal int LastScanReusedFiles {get;private set;}
@@ -31,8 +31,10 @@ namespace StudentAgeDialogueSave.Storage
         private const int TombstoneReserveFiles = 256;
 
         public Repository(string saveDirectory, string stagingDirectory, string backupDirectory,
-            long? maximumTotalBytes = null, int? maximumFiles = null, bool retainLocalCopies = false, Action<string> diagnostics = null)
+            long? maximumTotalBytes = null, int? maximumFiles = null, bool retainLocalCopies = false, Action<string> diagnostics = null,
+            bool pruneSuperseded = false)
         {
+            _pruneSuperseded = pruneSuperseded;
             if ((maximumTotalBytes.HasValue && (maximumTotalBytes.Value < 1 || maximumTotalBytes.Value > long.MaxValue - TombstoneReserveBytes)) ||
                 (maximumFiles.HasValue && (maximumFiles.Value < 1 || maximumFiles.Value > int.MaxValue - TombstoneReserveFiles)))
                 throw new ArgumentOutOfRangeException("存档限额必须为有效正数。");
@@ -70,7 +72,17 @@ namespace StudentAgeDialogueSave.Storage
                 throw new InvalidDataException("合并父版本数量过多。");
             lock (_gate)
             using (AcquireWriteLock())
-                return PublishInternal(snapshot, checkParents);
+            {
+                var published = PublishInternal(snapshot, checkParents);
+                // The new revision covers the slot's previous head; reclaim it now. Pruning
+                // never turns a committed save into a failure.
+                if (_pruneSuperseded)
+                {
+                    try { Scan(); }
+                    catch (Exception ex) { LocalCopyWarning("旧版本清理未完成，存档已保存：" + ex.Message); }
+                }
+                return published;
+            }
         }
 
         private SaveRecord PublishInternal(SaveEnvelope snapshot, bool checkParents = false)
@@ -114,9 +126,10 @@ namespace StudentAgeDialogueSave.Storage
                     if (checkParents) CheckExpectedHeads(value.Header);
                     // No copy fallback: a cross-device publish must fail, not expose a partial file.
                     AtomicPublish(stage, target);
-                    PreserveLocalCopy(target);
+                    PreserveLocalCopy(target, bytes);
                     var published=new SaveRecord { PreviewImageUrl=(string)(value.Dialogue?["cg"] as Newtonsoft.Json.Linq.JObject)?["url"],PreviewBackgroundId=(int?)value.Dialogue?["background"]??0,PreviewSpeakerId=(int?)value.Dialogue?["speakerId"]??0, Header = value.Header, FilePath = target, SchemaVersion = 1, Status = value.Kind == "tombstone" ? SaveStatus.Deleted : SaveStatus.Ready };
-                    verifiedRows[target]=new VerifiedRow{Hash=SaveCodec.Hash(bytes),Record=CopyRecord(published)};
+                    var stamp=new FileInfo(target);
+                    verifiedRows[target]=new VerifiedRow{Hash=SaveCodec.Hash(bytes),Length=stamp.Length,WriteTicks=stamp.LastWriteTimeUtc.Ticks,Record=CopyRecord(published)};
                     return published;
                 }
                 finally
@@ -166,11 +179,17 @@ namespace StudentAgeDialogueSave.Storage
                         string name = Path.GetFileNameWithoutExtension(path).Substring("dialogue_".Length);
                         SaveCodec.Revision(name);
                         CheckFileLink(path);
-                        // Always read/hash current bytes, including conflict checks. Size,
-                        // mtime and TTL cannot prove that a cloud/external edit is unchanged.
-                        var bytes=SaveCodec.ReadBytes(path);string hash=SaveCodec.Hash(bytes);
-                        if(verifiedRows.TryGetValue(path,out var cached) && cached.Hash==hash)
+                        // Revision files are immutable and named by their revision ID, so an unchanged
+                        // size and write time reuses the verified header without rereading the body.
+                        // Any rewrite (cloud download, copy, edit) changes the stamp and is decoded
+                        // again; Load always verifies the complete bytes it restores.
+                        var info=new FileInfo(path);long length=info.Length,ticks=info.LastWriteTimeUtc.Ticks;
+                        verifiedRows.TryGetValue(path,out var cached);
+                        byte[] bytes=null;string hash=null;
+                        if(cached==null || cached.Length!=length || cached.WriteTicks!=ticks){bytes=SaveCodec.ReadBytes(path);hash=SaveCodec.Hash(bytes);}
+                        if(cached!=null && (bytes==null || cached.Hash==hash))
                         {
+                            cached.Length=length;cached.WriteTicks=ticks;
                             records.Add(CopyRecord(cached.Record));LastScanReusedFiles++;
                             if(cached.Record.Status==SaveStatus.Ready || cached.Record.Status==SaveStatus.Deleted)PreserveLocalCopy(path,retained);
                             continue;
@@ -200,7 +219,7 @@ namespace StudentAgeDialogueSave.Storage
                             record.Status = value.Kind == "tombstone" ? SaveStatus.Deleted : SaveStatus.Ready;
                             PreserveLocalCopy(path,retained);
                         }
-                        verifiedRows[path]=new VerifiedRow{Hash=hash,Record=CopyRecord(record)};
+                        verifiedRows[path]=new VerifiedRow{Hash=hash,Length=length,WriteTicks=ticks,Record=CopyRecord(record)};
                     }
                     catch (Exception error) when (error is IOException || error is InvalidDataException || error is UnauthorizedAccessException || error is JsonException || error is ArgumentException || error is OverflowException || error is FormatException)
                     {
@@ -211,6 +230,7 @@ namespace StudentAgeDialogueSave.Storage
                     records.Add(record);
                 }
                 foreach(var row in records)if((row.Status==SaveStatus.Ready || row.Status==SaveStatus.Deleted) && !Committed(row.Header))row.Status=SaveStatus.Pending;
+                if(_pruneSuperseded)PruneSuperseded(records);
                 FindHeads(records);
                 var live=new HashSet<string>(records.Select(r=>r.FilePath),StringComparer.Ordinal);
                 foreach(string missing in verifiedRows.Keys.Where(p=>!live.Contains(p)).ToArray())verifiedRows.Remove(missing);
@@ -259,6 +279,7 @@ namespace StudentAgeDialogueSave.Storage
                 {
                     string target = Path.Combine(_saveDirectory, Path.GetFileName(source));
                     if (present.Contains(Path.GetFileName(source))) continue; // Atomic publication still never overwrites a newly arriving file.
+                    if (IsPrunedCopy(source)) continue; // A proven-superseded revision is reclaimed, not restored.
                     try { CopyVerifiedRevision(source, target, _stagingDirectory); }
                     catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is InvalidDataException || ex is Win32Exception || ex is JsonException || ex is ArgumentException || ex is FormatException || ex is OverflowException)
                     { LocalCopyWarning("本地副本恢复未完成，原文件保留：" + ex.Message); }
@@ -350,7 +371,7 @@ namespace StudentAgeDialogueSave.Storage
             }
         }
 
-        private static string[] CollectDeletionClosure(SaveHeader target, List<SaveRecord> records)
+        private string[] CollectDeletionClosure(SaveHeader target, List<SaveRecord> records)
         {
             var sameSlot = records.Where(r => r.Header != null && SlotKey(r.Header) == SlotKey(target) &&
                 (r.Status == SaveStatus.Ready || r.Status == SaveStatus.Deleted)).ToList();
@@ -376,7 +397,15 @@ namespace StudentAgeDialogueSave.Storage
                     // their entire ancestry even when their checkpoint bodies are absent.
                     closure.UnionWith(completeMarker.Header.ParentRevisionIds);
                 }
-                else throw new InvalidDataException("历史存档尚未同步完整，请完成同步后再删除。缺少版本：" + revision);
+                else if (PrunedParents(revision) is string[] prunedParents)
+                {
+                    // Reclaimed here after a verified descendant covered it: continue through
+                    // the recorded ancestry so the marker still suppresses older copies.
+                    foreach (string parent in prunedParents) pending.Push(parent);
+                }
+                else if (!_pruneSuperseded) throw new InvalidDataException("历史存档尚未同步完整，请完成同步后再删除。缺少版本：" + revision);
+                // With reclamation enabled, another device may already have removed a covered
+                // ancestor. Its ID is still listed, so an arriving copy stays suppressed.
                 if (closure.Count > 8192) throw new InvalidDataException("历史版本数量过多，不能完整记录删除范围。");
             }
             return closure.OrderBy(x => x, StringComparer.Ordinal).ToArray();
@@ -424,7 +453,13 @@ namespace StudentAgeDialogueSave.Storage
                 throw new InvalidDataException("存档位已被其他进程或设备更新，请重新选择；已有版本均已保留。");
         }
 
-        private FileStream AcquireWriteLock()
+        private sealed class WriteLock : IDisposable
+        {
+            readonly Repository owner; readonly FileStream stream;
+            internal WriteLock(Repository owner, FileStream stream) { this.owner = owner; this.stream = stream; owner._holdingWriteLock = true; }
+            public void Dispose() { owner._holdingWriteLock = false; stream.Dispose(); }
+        }
+        private IDisposable AcquireWriteLock()
         {
             EnsureDirectories();
             string directory = Path.Combine(_stagingDirectory, "Locks");
@@ -435,7 +470,7 @@ namespace StudentAgeDialogueSave.Storage
             var elapsed = Stopwatch.StartNew();
             while (true)
             {
-                try { return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+                try { return new WriteLock(this, new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)); }
                 catch (IOException error)
                 {
                     if (elapsed.ElapsedMilliseconds >= 5000)
