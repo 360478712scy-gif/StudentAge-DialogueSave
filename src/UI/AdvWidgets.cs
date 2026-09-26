@@ -166,6 +166,9 @@ namespace StudentAgeDialogueSave.UI
             var t=Label("Caption",r,font,caption,4,0,w-8,h,20,Ink);t.alignment=TextAlignmentOptions.Center;
             b.onClick.AddListener(()=>click());return b;
         }
+        // Pages are authored top-left in 1920x1080. On other window shapes the Expand scaler
+        // adds room below or to the right; center the design area like the native letterbox, unscaled.
+        internal static void CenterDesign(GameObject canvas){if(canvas.GetComponent<DesignStage>()==null)canvas.AddComponent<DesignStage>();}
         internal static GameObject Canvas(string name,int order)
         {
             var go=new GameObject(name,typeof(RectTransform),typeof(Canvas),typeof(CanvasScaler),typeof(GraphicRaycaster));
@@ -174,6 +177,27 @@ namespace StudentAgeDialogueSave.UI
             var scaler=go.GetComponent<CanvasScaler>();scaler.uiScaleMode=CanvasScaler.ScaleMode.ScaleWithScreenSize;
             scaler.referenceResolution=new Vector2(1920,1080);scaler.screenMatchMode=CanvasScaler.ScreenMatchMode.Expand;
             return go;
+        }
+    }
+    internal sealed class DesignStage:MonoBehaviour
+    {
+        readonly Dictionary<RectTransform,Vector2> positions=new Dictionary<RectTransform,Vector2>();
+        Vector2 lastSize=new Vector2(-1,-1);int lastCount=-1;
+        void LateUpdate()
+        {
+            var root=(RectTransform)transform;var size=root.rect.size;
+            if(size==lastSize && transform.childCount==lastCount && positions.Keys.All(k=>k!=null))return;
+            lastSize=size;lastCount=transform.childCount;
+            foreach(var gone in positions.Keys.Where(k=>k==null).ToArray())positions.Remove(gone);
+            var offset=new Vector2((size.x-1920f)/2f,-(size.y-1080f)/2f);
+            var top=new Vector2(0,1);
+            foreach(Transform child in transform)
+            {
+                var r=child as RectTransform;
+                if(r==null || r.anchorMin!=top || r.anchorMax!=top || r.pivot!=top)continue;
+                if(!positions.ContainsKey(r))positions[r]=r.anchoredPosition;
+                r.anchoredPosition=positions[r]+offset;
+            }
         }
     }
 }

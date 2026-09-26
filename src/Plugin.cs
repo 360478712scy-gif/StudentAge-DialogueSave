@@ -21,7 +21,7 @@ namespace StudentAgeDialogueSave
     public sealed class DialogueSavePlugin : BaseUnityPlugin
     {
         public const string Id = "local.studentage.dialoguesave";
-        public const string Version = "0.2.2";
+        public const string Version = "0.2.3";
         internal static DialogueRuntimeHost Host;
         void Awake()
         {

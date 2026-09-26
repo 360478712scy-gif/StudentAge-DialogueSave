@@ -34,7 +34,7 @@ namespace StudentAgeDialogueSave.UI
         string Status{set{help.SetStatus(value);}}
         internal static AdvSavePage Open(SaveView view,DialogueSaveService service)
         {
-            var root=AdvWidgets.Canvas("DialogueSave.Archive",30700);var page=root.AddComponent<AdvSavePage>();Active=page;
+            var root=AdvWidgets.Canvas("DialogueSave.Archive",30700);AdvWidgets.CenterDesign(root);var page=root.AddComponent<AdvSavePage>();Active=page;
             page.view=view;page.service=service;page.titleBrowse=DialogueUiController.IsTitleScreen();page.mode=view.isSaveMode&&!page.titleBrowse?0:1;page.font=AdvWidgets.ReadingFont(TMP_Settings.defaultFontAsset);
             var config=AdvDialogueController.Active.Configuration;
             page.holdEdit=config.Bind("Archive","KeepEditing",true,"编辑完成后保持当前编辑工具；关闭则成功一次后取消选择。");
@@ -370,7 +370,7 @@ namespace StudentAgeDialogueSave.UI
         void EditNote(int slot,DialogueUiRecord record)
         {
             var opening=AdvSettingsTransition.Capture();
-            editor=AdvWidgets.Canvas("Archive.NoteEditor",32100);AdvWidgets.Box("Shade",editor.transform,0,0,1920,1080,new Color(0,0,0,.4f),true);
+            editor=AdvWidgets.Canvas("Archive.NoteEditor",32100);AdvWidgets.CenterDesign(editor);AdvWidgets.Box("Shade",editor.transform,0,0,1920,1080,new Color(0,0,0,.4f),true);
             var panel=AdvSettingsSkin.Card("备注",editor.transform,450,280,1020,440).rectTransform;
             var caption=AdvWidgets.Label("Title",panel,font,"编辑备注",32,18,950,46,30,AdvArchiveSkin.Ink);
             var area=AdvWidgets.Rect("Note input",panel,34,88,952,230);var paper=area.gameObject.AddComponent<Image>();paper.color=Color.white;area.gameObject.AddComponent<RectMask2D>();

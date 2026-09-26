@@ -47,7 +47,7 @@ namespace StudentAgeDialogueSave.UI
             string signature=string.Join("|",view.dropdown_resolution.options.ConvertAll(o=>o.text))+"/"+string.Join("|",view.dropdown_fullscreen.options.ConvertAll(o=>o.text))+"/"+string.Join("|",view.dropdown_lanuage.options.ConvertAll(o=>o.text))+"/"+view.group_lanuage.gameObject.activeSelf;
             if(cached!=null && (cached.owner!=owner || cached.optionsSignature!=signature)){Destroy(cached.gameObject);cached=null;}
             var result=cached;
-            if(result==null){var root=AdvWidgets.Canvas("DialogueSave.Settings",30500);result=root.AddComponent<AdvSettings>();cached=result;}
+            if(result==null){var root=AdvWidgets.Canvas("DialogueSave.Settings",30500);AdvWidgets.CenterDesign(root);result=root.AddComponent<AdvSettings>();cached=result;}
             result.closed=false;Active=result;result.gameObject.SetActive(true);
             result.optionsSignature=signature;result.view=view;result.owner=owner;result.font=font;result.pause=pause;
             result.confirmations=ConfirmationOptions.Snapshot(owner.Configuration);result.resetNativeConfirmations=false;result.confirmationDirty.Clear();

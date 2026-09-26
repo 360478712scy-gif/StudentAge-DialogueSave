@@ -328,7 +328,7 @@ namespace StudentAgeDialogueSave.UI
             talk=view;transitionPending=DialoguePresentationPolicy.IsTransition(view);font=AdvWidgets.DialogueFontOverride??AdvWidgets.ReadingFont(view.txtex_content.font,true);fullLine=view.tmpTalks!=null && view.tmpTalkIdx>=0 && view.tmpTalkIdx<view.tmpTalks.Count?view.tmpTalks[view.tmpTalkIdx]:view.txtex_content.text;
             nextHistory=Time.unscaledTime+.35f;
             canvas=AdvWidgets.Canvas("DialogueSave.ADV",29000);
-            var root=AdvWidgets.Rect("Frame",canvas.transform,0,0,1920,1080);
+            var root=AdvWidgets.Rect("Frame",canvas.transform,0,0,1920,1080);root.anchorMin=root.anchorMax=root.pivot=new Vector2(.5f,.5f);root.anchoredPosition=Vector2.zero; // Centered like the native letterboxed view.
             root.anchorMin=root.anchorMax=new Vector2(.5f,.5f);root.pivot=new Vector2(.5f,.5f);root.anchoredPosition=Vector2.zero;
             bodyRoot=AdvWidgets.Rect("Reading",root,0,0,1920,1080).gameObject;
             veil=AdvWidgets.Rect("Soft upper edge",bodyRoot.transform,0,761,1920,376).gameObject.AddComponent<AdvVeil>();veil.raycastTarget=false;veil.SetReadingTone();
