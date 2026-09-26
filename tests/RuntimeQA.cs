@@ -160,6 +160,7 @@ public sealed class DialogueQaDriver:MonoBehaviour
         {var person=Cfg.PersonCfgMap.Values.Single(p=>p.name=="肖清雅");foreach(int id in new[]{1900000001,1900000002}){Cfg.TalkCfgMap[id].roleIds=new List<int>{person.id};Cfg.TalkCfgMap[id].roleName=null;}}
         evt.EnqueueEvt(0,1);evt.ShowNewRoundEvent();
         yield return Until(()=>adapter.IsSupportedDialogueContext,20,"native queued dialogue tracked");
+        if(File.Exists(Path.Combine(root,"layout.txt"))) {yield return RuntimeLayoutQA.Run(Check,Until,root);yield break;}
         if(File.Exists(Path.Combine(root,"storage-perf.txt"))) {yield return RuntimeStoragePerfQA.Run(adapter,(DialogueSaveService)service,Check,Until,root);yield break;}
         if(File.Exists(Path.Combine(root,"archive-routing.txt"))) {yield return RuntimeArchiveRoutingQA.Run(adapter,ui,(DialogueSaveService)service,Check,Until,root);yield break;}
         if(File.Exists(Path.Combine(root,"perf-sweep.txt"))) {yield return RuntimePerfSweepQA.Run(adapter,Check,Until,root);yield break;}
