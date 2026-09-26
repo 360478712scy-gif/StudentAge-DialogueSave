@@ -38,6 +38,7 @@ namespace StudentAgeDialogueSave.UI
         readonly List<int> leaving=new List<int>();
         TextMeshProUGUI dateLabel;
 
+        static readonly System.Reflection.MethodInfo CloneRecord=typeof(object).GetMethod("MemberwiseClone",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic);
         void SetRecords(List<TalkData> data,DialogueHistory savedHistory)
         {
             history=savedHistory;checkpoints.Clear();
@@ -46,13 +47,17 @@ namespace StudentAgeDialogueSave.UI
             var byLine=history.Entries.Select((entry,index)=>new{entry,index}).ToLookup(x=>x.entry.NativeCount-1);
             for(int i=0;i<native.Count;i++)
             {
-                int row=records.Count;records.Add(native[i]);
+                // A line and the choices shown under it are one entry, as on screen:
+                // "text\n选择项：A/B". Its jump restores the choice state, line still visible.
+                int row=records.Count;var record=native[i];
                 foreach(var item in byLine[i])
                 {
-                    if(!item.entry.IsOption){checkpoints[row]=item.index;continue;}
-                    checkpoints[records.Count]=item.index;
-                    records.Add(new TalkData{talkId=item.entry.TalkId,roleName="选项",content=item.entry.Text});
+                    checkpoints[row]=item.index;
+                    if(!item.entry.IsOption)continue;
+                    record=(TalkData)CloneRecord.Invoke(native[i],null);
+                    record.content=native[i].content+"\n选择项："+item.entry.Text.Replace("\n","/");
                 }
+                records.Add(record);
             }
         }
         internal void Reload(List<TalkData> data,DialogueHistory savedHistory)

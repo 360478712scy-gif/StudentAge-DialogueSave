@@ -62,7 +62,7 @@ public static class RuntimeSisiQA
         AdvDialogueController.Active.SelectMode("ADV");
         // Enter the author's event through native ShowEvent; fixture bypasses calendar/friendship prerequisites only.
         var targets=new HashSet<int>{1277067008,1277067063,1277069009,1277069031,1277069074,1277069096,1277069110};
-        var visited=new HashSet<int>();var trace=new List<string>();
+        var visited=new HashSet<int>();var trace=new List<string>();var saveProbe=new HashSet<int>();var saveLog=new List<string>();
         foreach(int eventId in (File.Exists(Path.Combine(root,"sisi-after-funeral.txt"))?new[]{1277069}:new[]{1277067,1277069}))
         {
             var evt=Singleton<CommonEvtMgr>.Ins;
@@ -85,6 +85,21 @@ public static class RuntimeSisiQA
                     yield return new WaitForSecondsRealtime(cfg.bg!=0||cfg.screenEffect?.Count>0?1.1f:.12f);
                 }
                 if(Time.realtimeSinceStartup-lastChange>=22) check(false,"author line stalled "+cfg.id+" state="+talk.talkState);
+                if((talk.talkState==TalkState.AnimEnd || talk.talkState==TalkState.Option) && saveProbe.Add(cfg.id))
+                {
+                    // Record whether a player could save on this stable authored line, and why not.
+                    yield return null;
+                    bool can=adapter.CanCapture(out string why);
+                    string detail="";
+                    if(!can)
+                    {
+                        detail=" | type="+AccessTools.Field(typeof(NewTalkView),"talkType").GetValue(talk)+" waitFrame="+AccessTools.Field(typeof(NewTalkView),"waitFrame").GetValue(talk)+"/"+Time.frameCount+" delaying="+AccessTools.Field(typeof(NewTalkView),"isDelaying").GetValue(talk)+" optionDepth="+AccessTools.Field(typeof(DialogueCheckpointAdapter),"optionDepth").GetValue(adapter)+" state="+talk.talkState;
+                        yield return new WaitForSecondsRealtime(1.5f);
+                        bool later=adapter.CanCapture(out string laterWhy);detail+=" | after1.5s="+(later?"OK":laterWhy);
+                    }
+                    saveLog.Add(cfg.id+" | "+(can?"OK":why)+" | effects="+string.Join(",",cfg.screenEffect??new List<float>())+" bg="+cfg.bg+detail);
+                    File.WriteAllLines(Path.Combine(root,"results/sisi-save-probe.txt"),saveLog);
+                }
                 if(talk.talkState==TalkState.AnimEnd && targets.Remove(cfg.id))
                 {
                     yield return new WaitForSecondsRealtime(.7f);

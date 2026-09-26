@@ -241,14 +241,23 @@ namespace StudentAgeDialogueSave.GameIntegration
             if (Get<bool>(view, "isPhoneing") || Get<bool>(view, "isShowingComic") ||
                 view.paperId != 0 || view.group_foreground.gameObject.activeInHierarchy ||
                 view.group_item.gameObject.activeInHierarchy || view.group_msg.gameObject.activeInHierarchy ||
-                view.img_screen_effect.gameObject.activeInHierarchy || Get<object>(view, "curVFX") != null)
+                view.img_screen_effect.gameObject.activeInHierarchy || (Get<object>(view, "curVFX") is ParticleSystem vfx && vfx != null && vfx.IsAlive(true)))
                 return Refuse(out reason, "此特殊演出或限时操作尚不支持对话存档");
             TalkCfg cfg = Get<TalkCfg>(view, "cfg");
             bool cgActive=Get<bool>(view,"isShowingCG");
             if(cgActive && CaptureCg(view)==null)return Refuse(out reason,"CG 画面仍在加载，请稍后保存");
-            if (cfg == null || (cfg.screenEffect != null && cfg.screenEffect.Count > 0 &&
-                !(cgActive && (cfg.screenEffect[0]==4015f || cfg.screenEffect[0]==4019f))))
-                return Refuse(out reason, "此对白的特殊演出状态尚未完成适配");
+            if (cfg == null) return Refuse(out reason, "此对白的特殊演出状态尚未完成适配");
+            if (cfg.screenEffect != null && cfg.screenEffect.Count > 0)
+            {
+                // Native one-shot effects (flash, shake, fades, CG hide, poses, background) replay
+                // with the line on restore; lasting states (overlay, phone, item, paper, comic, VFX)
+                // are refused by the checks above. Unknown or mod/UP effect ids stay refused.
+                int effect = (int)cfg.screenEffect[0];
+                bool cgEffect = effect == 4015 || effect == 4019;
+                bool native = effect >= 4001 && effect <= 4019 && effect != 4016;
+                if (cgEffect ? !cgActive : !native)
+                    return Refuse(out reason, "此对白的特殊演出状态尚未完成适配");
+            }
             if (view.tmpTalks == null || view.tmpTalkIdx < 0 || view.tmpTalkIdx >= view.tmpTalks.Count ||
                 (!pausedTyping && ((TMPro.TextMeshProUGUI)Call(view,"GetTalkTxt")).text != view.tmpTalks[view.tmpTalkIdx]))
                 return Refuse(out reason, "对白仍在显示过程中");
