@@ -21,7 +21,7 @@ internal static class RuntimeLayoutQA
         yield return new WaitForSecondsRealtime(1);
         string log="screen="+Screen.width+"x"+Screen.height+"\n";
         var frame=Resources.FindObjectsOfTypeAll<RectTransform>().First(r=>r.name=="Frame" && r.parent!=null && r.parent.name=="DialogueSave.ADV");
-        {var c=new Vector3[4];frame.GetWorldCorners(c);check(Mathf.Abs(c[0].y)<2 && Mathf.Abs(c[0].x-(Screen.width-c[2].x))<2,"dialogue frame sits on the screen bottom (bottom "+c[0].y+")");log+="dialogue bottom="+c[0].y+" top="+(Screen.height-c[1].y)+"\n";}
+        log+=Gap("dialogue",frame,check);check(frame.GetComponent<UnityEngine.UI.RectMask2D>()!=null,"dialogue clipped to the game picture");
         yield return Shot(root,"layout-dialogue");
         UIMgr.OpenView<SettingView>(UILayerType.Tips,null,new object[]{true});
         yield return until(()=>AdvSettingsTransition.Active!=null,15,"layout settings transition starts");

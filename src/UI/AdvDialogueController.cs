@@ -329,8 +329,9 @@ namespace StudentAgeDialogueSave.UI
             nextHistory=Time.unscaledTime+.35f;
             canvas=AdvWidgets.Canvas("DialogueSave.ADV",29000);
             var root=AdvWidgets.Rect("Frame",canvas.transform,0,0,1920,1080);
-            // Bottom-aligned like the native dialogue and toolbar on any window shape.
-            root.anchorMin=root.anchorMax=root.pivot=new Vector2(.5f,0);root.anchoredPosition=Vector2.zero;
+            // Centered on the native 16:9 game picture; clip to it so art that extends past the
+            // design edge (upper veil, slid-away toolbar) stays out of the letterbox, as on 16:9.
+            root.anchorMin=root.anchorMax=root.pivot=new Vector2(.5f,.5f);root.anchoredPosition=Vector2.zero;root.gameObject.AddComponent<RectMask2D>();
             bodyRoot=AdvWidgets.Rect("Reading",root,0,0,1920,1080).gameObject;
             veil=AdvWidgets.Rect("Soft upper edge",bodyRoot.transform,0,761,1920,376).gameObject.AddComponent<AdvVeil>();veil.raycastTarget=false;veil.SetReadingTone();
             cgVeil=AdvWidgets.Rect("Native CG veil",bodyRoot.transform,0,0,1920,1).gameObject.AddComponent<RawImage>();cgVeil.raycastTarget=false;cgVeil.gameObject.SetActive(false);cgVeilSource=null;
