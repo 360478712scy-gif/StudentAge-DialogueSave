@@ -567,8 +567,9 @@ namespace StudentAgeDialogueSave.UI
         void SyncOptions()
         {
             bool shown=talk.talkState==TalkState.Option;
-            bodyRoot.SetActive(!shown && !hidden);
-            choiceVeil.SetActive(shown && !hidden);
+            // As in the original game, the line stays on screen above its choices.
+            bodyRoot.SetActive(!hidden);
+            choiceVeil.SetActive(false);
             choiceRoot.SetActive(shown && !hidden);
             if(!shown){optionBindingsReady=false;optionCellIds.Clear();optionIds.Clear();return;}
             skipping=false;

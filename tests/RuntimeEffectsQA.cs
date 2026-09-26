@@ -54,7 +54,13 @@ internal static class RuntimeEffectsQA
             talk().OnClickNext();
             yield return until(()=>current()==1900000204 && talk().talkState==TalkState.Option,20,"choice line shown");
             yield return new WaitForSecondsRealtime(1f);
-            var adv=AdvDialogueController.Active;adv.OpenHistory();
+            var adv=AdvDialogueController.Active;
+            var body=(GameObject)AccessTools.Field(typeof(AdvDialogueController),"bodyRoot").GetValue(adv);
+            var shown=(TMPro.TextMeshProUGUI)AccessTools.Field(typeof(AdvDialogueController),"shownText").GetValue(adv);
+            log.Add("choice state: body="+body.activeInHierarchy+" text="+(shown!=null?shown.text:"null"));
+            check(body.activeInHierarchy && shown!=null && shown.gameObject.activeInHierarchy && shown.text.StartsWith("要慎重对待这份感情"),"line stays visible together with its choices");
+            yield return new WaitForEndOfFrame();ScreenCapture.CaptureScreenshot(Path.Combine(root,"results/effects-choice.png"));yield return new WaitForSecondsRealtime(.5f);
+            adv.OpenHistory();
             yield return until(()=>Resources.FindObjectsOfTypeAll<AdvBacklog>().Any(r=>r.gameObject.activeInHierarchy) && AdvSettingsTransition.Active==null,10,"backlog open");
             yield return new WaitForSecondsRealtime(.6f);
             var reader=Resources.FindObjectsOfTypeAll<AdvBacklog>().Single(r=>r.gameObject.activeInHierarchy);
