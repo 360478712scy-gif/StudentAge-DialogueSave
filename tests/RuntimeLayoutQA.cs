@@ -20,8 +20,10 @@ internal static class RuntimeLayoutQA
         yield return until(()=>talk!=null && talk.talkState==TalkState.AnimEnd,20,"layout dialogue ready");
         yield return new WaitForSecondsRealtime(1);
         string log="screen="+Screen.width+"x"+Screen.height+"\n";
+        foreach(var cam in Camera.allCameras)log+="camera "+cam.name+" depth="+cam.depth+" rect="+cam.rect+" pixel="+cam.pixelRect+" clear="+cam.clearFlags+"\n";
+        foreach(var c in UnityEngine.Object.FindObjectsOfType<Canvas>().Where(c=>c.isRootCanvas))log+="canvas "+c.name+" order="+c.sortingOrder+" mode="+c.renderMode+" size="+((RectTransform)c.transform).rect.size+" scaler="+(c.GetComponent<UnityEngine.UI.CanvasScaler>() is var cs && cs!=null?cs.uiScaleMode+"/"+cs.screenMatchMode+"/"+cs.matchWidthOrHeight+"/"+cs.referenceResolution:"none")+"\n";
         var frame=Resources.FindObjectsOfTypeAll<RectTransform>().First(r=>r.name=="Frame" && r.parent!=null && r.parent.name=="DialogueSave.ADV");
-        log+=Gap("dialogue",frame,check);check(frame.GetComponent<UnityEngine.UI.RectMask2D>()!=null,"dialogue clipped to the game picture");
+        log+=Gap("dialogue",frame,check);check(Resources.FindObjectsOfTypeAll<Canvas>().Any(c=>c.name=="DialogueSave.Letterbox" && c.GetComponentsInChildren<UnityEngine.UI.Image>().Count(i=>i.gameObject.activeInHierarchy)==2),"letterbox bars cover the area outside the game picture");
         yield return Shot(root,"layout-dialogue");
         UIMgr.OpenView<SettingView>(UILayerType.Tips,null,new object[]{true});
         yield return until(()=>AdvSettingsTransition.Active!=null,15,"layout settings transition starts");

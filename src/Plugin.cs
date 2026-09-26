@@ -155,6 +155,7 @@ namespace StudentAgeDialogueSave
                 Cleanup(() => exitSave?.Dispose());
                 Cleanup(() => ComicPresentationAdapter.Clear());
                 Cleanup(() => adv?.Dispose());
+                Cleanup(StudentAgeDialogueSave.UI.Letterbox.Release);
                 Cleanup(() => service?.Dispose());
                 Cleanup(() => ui?.Dispose());
                 Cleanup(() => adapter?.Dispose());

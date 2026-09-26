@@ -176,6 +176,7 @@ namespace StudentAgeDialogueSave.UI
             var canvas=go.GetComponent<Canvas>();canvas.renderMode=RenderMode.ScreenSpaceOverlay;canvas.sortingOrder=order;
             var scaler=go.GetComponent<CanvasScaler>();scaler.uiScaleMode=CanvasScaler.ScaleMode.ScaleWithScreenSize;
             scaler.referenceResolution=new Vector2(1920,1080);scaler.screenMatchMode=CanvasScaler.ScreenMatchMode.Expand;
+            if(name!="DialogueSave.ADV.OptionTooltip")Letterbox.Track(go);
             return go;
         }
     }
@@ -202,6 +203,50 @@ namespace StudentAgeDialogueSave.UI
                 var target=design+offset;
                 if(r.anchoredPosition!=target)r.anchoredPosition=target;
             }
+        }
+    }
+    // The game paints nothing outside its centered 16:9 picture. While any mod view is shown,
+    // cover those bars in black above every mod canvas, so art that runs past the picture
+    // edge (and any sub-pixel seam at that edge) never shows, without clipping mod layout.
+    internal sealed class Letterbox:MonoBehaviour
+    {
+        static Letterbox instance;
+        static readonly List<GameObject> tracked=new List<GameObject>();
+        RectTransform first,second;
+        internal static void Track(GameObject canvas)
+        {
+            tracked.Add(canvas);
+            if(instance!=null)return;
+            var go=new GameObject("DialogueSave.Letterbox",typeof(RectTransform),typeof(Canvas),typeof(CanvasScaler));
+            UnityEngine.Object.DontDestroyOnLoad(go);go.hideFlags=HideFlags.HideAndDontSave;
+            var c=go.GetComponent<Canvas>();c.renderMode=RenderMode.ScreenSpaceOverlay;c.sortingOrder=32760;
+            var scaler=go.GetComponent<CanvasScaler>();scaler.uiScaleMode=CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution=new Vector2(1920,1080);scaler.screenMatchMode=CanvasScaler.ScreenMatchMode.Expand;
+            instance=go.AddComponent<Letterbox>();instance.first=instance.Bar("Bar A");instance.second=instance.Bar("Bar B");instance.Refresh();
+        }
+        internal static void Release(){tracked.Clear();if(instance!=null)UnityEngine.Object.Destroy(instance.gameObject);instance=null;}
+        RectTransform Bar(string name)
+        {
+            var image=new GameObject(name,typeof(RectTransform),typeof(Image)).GetComponent<Image>();
+            image.rectTransform.SetParent(transform,false);image.color=Color.black;image.raycastTarget=false;return image.rectTransform;
+        }
+        void OnEnable(){Canvas.willRenderCanvases+=Refresh;}
+        void OnDisable(){Canvas.willRenderCanvases-=Refresh;}
+        void Refresh()
+        {
+            if(this==null || first==null)return;
+            tracked.RemoveAll(g=>g==null);
+            var size=DesignStage.CanvasSize();float tall=(size.y-1080f)/2f,wide=(size.x-1920f)/2f;
+            bool show=(tall>.01f || wide>.01f) && tracked.Any(g=>g.activeInHierarchy);
+            if(first.gameObject.activeSelf!=show){first.gameObject.SetActive(show);second.gameObject.SetActive(show);}
+            if(!show)return;
+            if(tall>.01f){Place(first,new Vector2(0,1),new Vector2(1,1),new Vector2(0,tall));Place(second,new Vector2(0,0),new Vector2(1,0),new Vector2(0,tall));}
+            else{Place(first,new Vector2(0,0),new Vector2(0,1),new Vector2(wide,0));Place(second,new Vector2(1,0),new Vector2(1,1),new Vector2(wide,0));}
+        }
+        static void Place(RectTransform r,Vector2 min,Vector2 max,Vector2 size)
+        {
+            r.anchorMin=min;r.anchorMax=max;r.pivot=new Vector2(min.x==max.x?min.x:.5f,min.y==max.y?min.y:.5f);
+            r.anchoredPosition=Vector2.zero;r.sizeDelta=size;
         }
     }
 }
