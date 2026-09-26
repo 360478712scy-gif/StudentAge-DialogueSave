@@ -120,6 +120,15 @@ namespace StudentAgeDialogueSave.UI
             {left=Math.Min(left,x);right=Math.Max(right,x);bottom=Math.Min(bottom,y);top=Math.Max(top,y);}
             return Rect.MinMaxRect(Math.Max(cell.xMin,left-2),Math.Max(cell.yMin,bottom-2),Math.Min(cell.xMax,right+3),Math.Min(cell.yMax,top+3));
         }
+        // Atlas neighbours sit directly beside some control crops; bilinear sampling of a
+        // sliced edge would smear them into full-length lines. Copy each crop with clear padding.
+        static Sprite Isolated(Texture2D texture,Rect rect,Vector4 border)
+        {
+            const int pad=2;int x=(int)rect.x,y=(int)rect.y,w=(int)rect.width,h=(int)rect.height;
+            var copy=new Texture2D(w+pad*2,h+pad*2,TextureFormat.RGBA32,false){filterMode=FilterMode.Bilinear,wrapMode=TextureWrapMode.Clamp};
+            copy.SetPixels32(new Color32[(w+pad*2)*(h+pad*2)]);copy.SetPixels(pad,pad,w,h,texture.GetPixels(x,y,w,h));copy.Apply(false,true);
+            extraLettering.Add(copy);return Make(copy,new Rect(pad,pad,w,h),border);
+        }
         static Sprite Make(Texture2D texture,Rect rect,Vector4 border)
         {var sprite=Sprite.Create(texture,rect,new Vector2(.5f,.5f),100,0,SpriteMeshType.FullRect,border);sprites.Add(sprite);return sprite;}
         internal static void Prepare()
@@ -165,7 +174,7 @@ namespace StudentAgeDialogueSave.UI
             }
             sourceControls.SetPixels32(original);sourceControls.Apply();
             int[] sourceY={61,8,114};
-            for(int state=0;state<3;state++)states[0,state]=Make(sourceControls,new Rect(80,sourceControls.height-sourceY[state]-53,308,53),new Vector4(30,24,30,24));
+            for(int state=0;state<3;state++)states[0,state]=Isolated(sourceControls,new Rect(80,sourceControls.height-sourceY[state]-53,308,53),new Vector4(30,24,30,24));
             choiceHover=new Texture2D(308,53,TextureFormat.RGBA32,false){filterMode=FilterMode.Bilinear,wrapMode=TextureWrapMode.Clamp};
             var selectedPixels=sourceControls.GetPixels(80,sourceControls.height-114-53,308,53);
             for(int i=0;i<selectedPixels.Length;i++)if(selectedPixels[i].b>.65f && selectedPixels[i].r<.3f)selectedPixels[i]=new Color(.12f,.65f,.96f,selectedPixels[i].a);

@@ -37,14 +37,15 @@ namespace StudentAgeDialogueSave.UI
         internal static void Play(RenderTexture snapshot,bool opening,System.Action completed=null,bool pageChange=false,int sortingOrder=30600,bool horizontal=false)
         {
             if(Active!=null)Destroy(Active.gameObject);
-            var root=AdvWidgets.Canvas("Settings diagonal transition",sortingOrder);
+            var root=AdvWidgets.Canvas("Settings diagonal transition",sortingOrder);AdvWidgets.CenterDesign(root);
             var result=root.AddComponent<AdvSettingsTransition>();Active=result;
             result.snapshot=snapshot;result.completed=completed;
             // Transparent input blocker covers the complete transition, including gaps.
-            AdvWidgets.Box("Transition input guard",root.transform,0,0,1920,1080,Color.clear).raycastTarget=true;
+            var guard=AdvWidgets.Box("Transition input guard",root.transform,0,0,1920,1080,Color.clear);guard.raycastTarget=true;AdvWidgets.Fill(guard.rectTransform);
             if(horizontal)
             {
-                result.oldFrame=PageSlats(root.transform,snapshot,new Rect(0,0,1920,1080));
+                // The snapshot is the whole window; slide it over the whole canvas, not a 16:9 box.
+                result.oldFrame=PageSlats(root.transform,snapshot,new Rect(0,0,1920,1080));result.oldFrame.FullScreen=true;AdvWidgets.Fill(result.oldFrame.rectTransform);
             }
             else if(pageChange)
             {
@@ -54,9 +55,9 @@ namespace StudentAgeDialogueSave.UI
             else
             {
                 result.oldFrame=AdvWidgets.Rect("Old picture slats",root.transform,0,0,1920,1080).gameObject.AddComponent<SettingsSlats>();
-                result.oldFrame.Picture=snapshot;result.oldFrame.Opening=opening;
+                result.oldFrame.Picture=snapshot;result.oldFrame.Opening=opening;AdvWidgets.Fill(result.oldFrame.rectTransform);
                 result.edges=AdvWidgets.Rect("Blue fine separators",root.transform,0,0,1920,1080).gameObject.AddComponent<SettingsSlats>();
-                result.edges.Edges=true;result.edges.Opening=opening;
+                result.edges.Edges=true;result.edges.Opening=opening;AdvWidgets.Fill(result.edges.rectTransform);
             }
             result.oldFrame.raycastTarget=false;if(result.edges!=null)result.edges.raycastTarget=false;
         }
@@ -84,7 +85,7 @@ namespace StudentAgeDialogueSave.UI
     {
         internal Texture Picture;
         internal bool Opening,Edges,Horizontal;
-        internal Rect ScreenRegion;
+        internal Rect ScreenRegion;internal bool FullScreen;
         internal float Progress;
         public override Texture mainTexture=>Picture!=null?Picture:Texture2D.whiteTexture;
         readonly Vector2[] workA=new Vector2[8],workB=new Vector2[8];
@@ -131,7 +132,10 @@ namespace StudentAgeDialogueSave.UI
         }
         void AddPageVertex(VertexHelper mesh,Rect rect,float x,float y)
         {
-            float u=(ScreenRegion.x+x)/1920f,v=(1080-ScreenRegion.y-ScreenRegion.height+y)/1080f;
+            // Page regions are design coordinates inside the centered 1920x1080 area of the canvas.
+            var screen=((RectTransform)canvas.rootCanvas.transform).rect;float cw=screen.width,ch=screen.height,u,v;
+            if(FullScreen){u=x/rect.width;v=y/rect.height;}
+            else{u=((cw-1920f)/2f+ScreenRegion.x+x)/cw;v=((ch-1080f)/2f+1080-ScreenRegion.y-ScreenRegion.height+y)/ch;}
             if(Picture is RenderTexture && SystemInfo.graphicsUVStartsAtTop)v=1-v;
             mesh.AddVert(new Vector3(rect.xMin+x,rect.yMin+y),Color.white,new Vector2(u,v));
         }

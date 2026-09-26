@@ -167,7 +167,7 @@ if not wine:
 if not wine:raise SystemExit('Set STUDENTAGE_CROSSOVER_WINE to the CrossOver wine executable.')
 bottle=os.environ.get('STUDENTAGE_BOTTLE','Steam')
 with (QA/'wine.log').open('w') as output:
-    child=subprocess.Popen([wine,'--bottle',bottle,'--dll','winhttp=n,b','--workdir',str(QA),exe,'-screen-fullscreen','0','-screen-width',os.environ.get('STUDENTAGE_QA_WIDTH','1920'),'-screen-height',os.environ.get('STUDENTAGE_QA_HEIGHT','1080'),'-logFile',log],env=env,stdout=output,stderr=subprocess.STDOUT)
+    child=subprocess.Popen([wine,'--bottle',bottle,'--dll','winhttp=n,b','--workdir',str(QA),exe,'-screen-fullscreen',os.environ.get('STUDENTAGE_QA_FULLSCREEN','0'),'-screen-width',os.environ.get('STUDENTAGE_QA_WIDTH','1920'),'-screen-height',os.environ.get('STUDENTAGE_QA_HEIGHT','1080'),'-logFile',log],env=env,stdout=output,stderr=subprocess.STDOUT)
     for _ in range(40):
         time.sleep(.25)
         processes=subprocess.check_output(['ps','-axo','pid,command'],text=True)

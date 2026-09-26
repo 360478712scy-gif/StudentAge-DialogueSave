@@ -78,6 +78,7 @@ namespace StudentAgeDialogueSave
             service = new DialogueSaveService(adapter, Post, message => log.LogInfo(message), NextFrame, shutdown.Token, auto, interval);
             ComicPresentationAdapter.Install(harmony);
             NativeFightInputFix.Install(harmony);
+            NativeWindowModeFix.Install(harmony);
             DialogueUiResourceLease.Install(harmony);
             exitSave = new DialogueExitSave(service, NextFrame, message => log.LogInfo(message), harmony);
             ui = new DialogueUiController(service, message => log.LogInfo(message));
