@@ -156,10 +156,12 @@ namespace StudentAgeDialogueSave.UI
             if(mode==3)
             {
                 native.Refresh();
-                foreach(var pair in native.Slots.Where(p=>nativeAutomatic?p.Value.isAuto:p.Value.isManual).OrderBy(p=>nativeDisplayPositions.ContainsKey(p.Key)?0:1).ThenBy(p=>p.Key))
+                // Manual cards sit at their stable native number, so overwrite/delete never
+                // reshuffles other saves. Automatic saves are listed in order.
+                foreach(var pair in native.Slots.Where(p=>nativeAutomatic?p.Value.isAuto:p.Value.isManual).OrderBy(p=>p.Key))
                 {
-                    int slot=nativeDisplayPositions.TryGetValue(pair.Key,out int mapped)?mapped:slots.Count+1;
-                    while(slots.ContainsKey(slot))slot++;slots[slot]=native.Record(pair.Value);nativePositions[slot]=pair.Key;
+                    int slot=nativeAutomatic?slots.Count+1:pair.Key;
+                    slots[slot]=native.Record(pair.Value);nativePositions[slot]=pair.Key;
                 }
                 native.RequestGenderHeaders();
             }

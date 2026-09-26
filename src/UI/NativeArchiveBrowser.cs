@@ -18,6 +18,7 @@ namespace StudentAgeDialogueSave.UI
         readonly string directory=Path.GetFullPath(PathDefine.SAVE_PATH).TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar);
         readonly Dictionary<string,SaveFileData> info=new Dictionary<string,SaveFileData>();
         internal readonly Dictionary<int,SaveFileData> Slots=new Dictionary<int,SaveFileData>();
+        internal const int AutomaticBase=100000;
         JObject layout=new JObject();string stamp;bool headersComplete;
         string IndexPath=>Path.Combine(directory,"dialogue_native_layout.json");
         internal Action Changed;
@@ -36,10 +37,15 @@ namespace StudentAgeDialogueSave.UI
                 if(info.TryGetValue(data.fileName,out var cached) && cached.date==data.date)data=cached;else info[data.fileName]=data;
                 if(!(layout["hidden"] as JArray??new JArray()).Values<string>().Contains(data.fileName))available[data.fileName]=data;
             }
-            foreach(var entry in arranged.Properties())if(int.TryParse(entry.Name,out int slot) && available.TryGetValue((string)entry.Value,out var data))
+            // Manual saves keep a stable number: the arranged slot, else their native position.
+            // Automatic/quick saves live in their own range and never push manual saves along
+            // (a new autosave every round used to renumber every unarranged manual save).
+            foreach(var entry in arranged.Properties())if(int.TryParse(entry.Name,out int slot) && slot>0 && available.TryGetValue((string)entry.Value,out var data) && data.isManual==(slot<AutomaticBase))
             {Slots[slot]=data;available.Remove(data.fileName);}
-            foreach(var data in available.Values)
-            {int slot=data.isManual && data.pos>0?data.pos:1;while(Slots.ContainsKey(slot))slot++;Slots[slot]=data;}
+            foreach(var data in available.Values.Where(d=>d.isManual).OrderBy(d=>d.pos).ThenBy(d=>d.fileName,StringComparer.Ordinal))
+            {int slot=Math.Max(1,data.pos);while(Slots.ContainsKey(slot))slot++;Slots[slot]=data;}
+            foreach(var data in available.Values.Where(d=>!d.isManual))
+            {int slot=AutomaticBase;while(Slots.ContainsKey(slot))slot++;Slots[slot]=data;}
             headersComplete=Slots.Values.All(d=>d.previewState==2);
         }
         internal string Note(SaveFileData data)=>(string)layout["notes"]?[data.fileName];

@@ -7,6 +7,9 @@ assert (QA/'isolation-verified.txt').exists()
 assert (QA/'StudentAge_Data/app.info').read_text()=='DlgSaveQA\nDialogSave'
 processes=subprocess.check_output(['ps','-axo','pid,command'],text=True)
 if any('StudentAge.exe' in x and 'winewrapper' not in x and 'exec_command' not in x and 'rg ' not in x for x in processes.splitlines()):raise SystemExit('Another game process is running')
+native_slots=QA/'native-slots.txt'
+if '--native-slots' in sys.argv:native_slots.write_text('Stable native save numbering')
+else:native_slots.unlink(missing_ok=True)
 layout_flag=QA/'layout.txt'
 if '--layout' in sys.argv:layout_flag.write_text('Centered pages on a non-16:9 window')
 else:layout_flag.unlink(missing_ok=True)
@@ -134,7 +137,7 @@ import re
 cfg=QA/'BepInEx/config/local.studentage.dialoguesave.cfg'
 contents=cfg.read_text() if cfg.exists() else '[Saving]\nAutoSave = false\n'
 mode='ADV' if adv_only else 'Ask' if adv else 'Original'
-if '--storage-perf' in sys.argv or '--layout' in sys.argv:mode='ADV'
+if '--storage-perf' in sys.argv or '--layout' in sys.argv or '--native-slots' in sys.argv:mode='ADV'
 if re.search(r'^DialogueStyle\s*=.*$',contents,re.M):contents=re.sub(r'^DialogueStyle\s*=.*$', 'DialogueStyle = '+mode,contents,flags=re.M)
 else:contents+='\n[Interface]\nDialogueStyle = '+mode+'\n'
 if adv:
