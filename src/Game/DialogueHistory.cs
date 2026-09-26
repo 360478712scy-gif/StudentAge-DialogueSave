@@ -29,6 +29,7 @@ namespace StudentAgeDialogueSave.GameIntegration
         readonly CancellationToken shutdown;
         readonly Action<string> log;
         internal readonly List<Entry> Entries=new List<Entry>();
+        internal int Revision {get;private set;}
         NewTalkView owner;
         int lastTalk=-1,lastSegment=-1,lastCount=-1;
         string lastPhase,lastFailure;
@@ -58,7 +59,7 @@ namespace StudentAgeDialogueSave.GameIntegration
                     NativeCount=((Newtonsoft.Json.Linq.JArray)data["history"]).Count,IsOption=option});
                 bytes+=checkpoint.State.WorldBytes.Length;
             }
-            Changed?.Invoke();
+            Revision++;Changed?.Invoke();
         }
 
         internal void Tick(NewTalkView view)
@@ -88,7 +89,7 @@ namespace StudentAgeDialogueSave.GameIntegration
                 // random state and presentation are still captured at every boundary.
                 var previous=Entries.Count==0?null:Entries[Entries.Count-1].Checkpoint.State.WorldBytes;
                 if(previous!=null && previous.Length==checkpoint.State.WorldBytes.Length &&
-                    Enumerable.SequenceEqual(previous,checkpoint.State.WorldBytes))checkpoint.State.WorldBytes=previous;
+                    SameBytes(previous,checkpoint.State.WorldBytes))checkpoint.State.WorldBytes=previous;
                 lastTalk=cfg.id;lastSegment=view.tmpTalkIdx;lastCount=count;lastPhase=phase;
                 LastCaptureMilliseconds=checkpoint.CaptureMilliseconds;
                 lastFailure=null;
@@ -104,7 +105,7 @@ namespace StudentAgeDialogueSave.GameIntegration
                     TalkId=cfg.id,Segment=view.tmpTalkIdx,NativeCount=count,Checkpoint=checkpoint });
                 bytes+=checkpoint.State.WorldBytes.Length;
                 // No age/count/byte eviction: visible earlier records keep their complete state.
-                Changed?.Invoke();
+                Revision++;Changed?.Invoke();
             }
             catch(Exception ex){log("回看检查点未建立："+ex.Message);}
         }
@@ -119,10 +120,12 @@ namespace StudentAgeDialogueSave.GameIntegration
                 owner=UIMgr.GetView<NewTalkView>(false) as NewTalkView;
                 lastTalk=selected.TalkId;lastSegment=selected.Segment;lastPhase=owner.talkState.ToString();
                 lastCount=(AccessTools.Field(typeof(NewTalkView),"historys").GetValue(owner) as List<TalkData>)?.Count??0;
-                Changed?.Invoke();
+                Revision++;Changed?.Invoke();
             }
             finally{Restoring=false;}
         }
-        internal void Clear(){Entries.Clear();bytes=0;lastTalk=lastSegment=lastCount=-1;lastPhase=null;owner=null;}
+        static bool SameBytes(byte[] left,byte[] right)
+        {for(int i=0;i<left.Length;i++)if(left[i]!=right[i])return false;return true;}
+        internal void Clear(){Revision++;Entries.Clear();bytes=0;lastTalk=lastSegment=lastCount=-1;lastPhase=null;owner=null;}
     }
 }

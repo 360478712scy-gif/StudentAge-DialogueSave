@@ -15,7 +15,7 @@ using StudentAgeDialogueSave.UI;
 namespace StudentAgeDialogueSave
 {
     // All public entry points run on Unity's main thread. Workers only receive detached DTOs.
-    internal sealed class DialogueSaveService : IDialogueUiService, IDisposable
+    internal sealed partial class DialogueSaveService : IDialogueUiService, IDisposable
     {
         readonly DialogueCheckpointAdapter adapter;
         readonly Action<Action> post;
@@ -230,8 +230,11 @@ namespace StudentAgeDialogueSave
         DialogueUiRecord ToUi(SaveRecord r)
         {
             var h = r.Header;
-            DateTime.TryParse(h.CreatedUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var date);
+            DateTime.TryParse(h.SavedUtc??h.CreatedUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var date);
             int.TryParse(h.LogicalSlot, out var slot);
+            string summary=r.PreviewText??h.Summary??"";
+            if(r.PreviewOptionIds?.Length>0 && !summary.StartsWith("选择项："))
+                summary="选择项："+string.Join("/",r.PreviewOptionIds.Select(id=>Config.Cfg.OptionCfgMap.TryGetValue(id,out var option)?RecordMgr.Replace(option.content):"选项 "+id));
             return new DialogueUiRecord
             {
                 RevisionId = h.RevisionId,
@@ -239,7 +242,7 @@ namespace StudentAgeDialogueSave
                 Category = ParseCategory(h.Category),
                 Slot = slot,
                 Speaker = h.Speaker ?? "",
-                Summary = h.Summary ?? "",
+                Summary = System.Text.RegularExpressions.Regex.Replace(summary, "<[^>]*>", ""),Comment=h.Comment,PreviewImageUrl=h.PreviewImageUrl??r.PreviewImageUrl,BackgroundId=h.BackgroundId??r.PreviewBackgroundId,SpeakerId=h.SpeakerId??r.PreviewSpeakerId,
                 CreatedUtc = date,
                 RoleName = h.RoleName ?? "",
                 YearLabel = h.YearLabel ?? "",
@@ -269,11 +272,11 @@ namespace StudentAgeDialogueSave
         }
         public void Save(DialogueUiCategory category, int slot, string replacedRevisionId, Action<UiResult> done)
         {
-            if (category != DialogueUiCategory.Manual) { InvokeResult(done, new UiResult(false, "自动和快速存档由对应功能创建。")); return; }
-            if (slot < 1 || slot > 99) { InvokeResult(done, new UiResult(false, "请选择1至99号对话存档位。")); return; }
+            if (category == DialogueUiCategory.Auto) { InvokeResult(done, new UiResult(false, "自动和快速存档由对应功能创建。")); return; }
+            if (slot < 1 || slot > 9999) { InvokeResult(done, new UiResult(false, "请选择1至9999号对话存档位。")); return; }
             if (!menuSaving || menuCapture == null) { InvokeResult(done, new UiResult(false, "当前没有打开对话保存界面。")); return; }
             StatusMessage = null;
-            string key = menuGeneration + ":" + slot + ":" + replacedRevisionId;
+            string key = menuGeneration + ":" + category + ":" + slot + ":" + replacedRevisionId;
             if (pendingSaves.TryGetValue(key, out var callbacks))
             {
                 if (done != null) callbacks.Add(done);
@@ -298,7 +301,7 @@ namespace StudentAgeDialogueSave
                 if (snapshot == null) throw menuCaptureError ?? new InvalidOperationException("未能完成当前对话快照。");
                 await WaitForStoreAsync(cancellation);
                 if (token != menuGeneration || epoch != captureEpochNumber) throw new OperationCanceledException();
-                result = await PublishAsync(snapshot, category, slot, replacement);
+                result = await PublishAsync(snapshot, category, slot, replacement, true);
             }
             catch (OperationCanceledException) { result = new UiResult(false, "保存请求已取消。"); }
             catch (Exception ex) { result = new UiResult(false, "保存未完成：" + ex.Message); }
@@ -323,8 +326,9 @@ namespace StudentAgeDialogueSave
         {
             internal UiResult Result;
             internal SaveRecord Record;
+            internal List<SaveRecord> Records;
         }
-        async Task<UiResult> PublishAsync(GameCheckpoint checkpoint, DialogueUiCategory category, int slot, string replacedRevisionId)
+        async Task<UiResult> PublishAsync(GameCheckpoint checkpoint, DialogueUiCategory category, int slot, string replacedRevisionId, bool requireEmpty=false)
         {
             if (busy) { return new UiResult(false, "正在存读档，请稍候。"); }
             if (!EnsureRepository(out var reason)) { return new UiResult(false, reason); }
@@ -333,10 +337,13 @@ namespace StudentAgeDialogueSave
             if (brief.SteamId != Platform.Current.GetUserId()) { return new UiResult(false, "Steam 账户已改变，请重新进入对话并打开保存界面。"); }
             if (records.Any(r => r.Status == SaveStatus.UnsupportedVersion && r.Header != null && r.Header.SteamId == brief.SteamId && r.Header.RunId == brief.RunId && r.Header.Category == cat && r.Header.LogicalSlot == logical))
             { return new UiResult(false, "此存档位含有新版插件创建的存档，请更新插件后操作。"); }
-            var heads = Repository.FindHeads(records).Where(r => r.Header.SteamId == brief.SteamId && r.Header.RunId == brief.RunId && r.Header.Category == cat && r.Header.LogicalSlot == logical).ToList();
+            var allHeads = Repository.FindHeads(records);
+            var replaced = string.IsNullOrEmpty(replacedRevisionId)?null:allHeads.SingleOrDefault(r=>r.Header.RevisionId==replacedRevisionId && r.Header.SteamId==brief.SteamId && r.Header.Category==cat);
+            bool crossRun = replaced!=null && replaced.Header.RunId!=brief.RunId;
+            var heads = allHeads.Where(r => r.Header.SteamId == brief.SteamId && r.Header.RunId == brief.RunId && r.Header.Category == cat && r.Header.LogicalSlot == logical).ToList();
             if (heads.Count > 1) { return new UiResult(false, "此存档位存在多个设备分支，请先在对话存档中处理冲突。"); }
-            if (category == DialogueUiCategory.Manual && string.IsNullOrEmpty(replacedRevisionId) && heads.Count > 0) { return new UiResult(false, "存档位已变化，请重新选择并确认覆盖。"); }
-            if (!string.IsNullOrEmpty(replacedRevisionId) && !heads.Any(r => r.Header.RevisionId == replacedRevisionId)) { return new UiResult(false, "存档位已变化，请重新选择。"); }
+            if ((category == DialogueUiCategory.Manual || requireEmpty) && string.IsNullOrEmpty(replacedRevisionId) && heads.Count > 0) { return new UiResult(false, "存档位已变化，请重新选择并确认覆盖。"); }
+            if (!string.IsNullOrEmpty(replacedRevisionId) && !(crossRun && heads.Count==0) && !heads.Any(r => r.Header.RevisionId == replacedRevisionId)) { return new UiResult(false, "存档位已变化，请重新选择。"); }
             var header = new SaveHeader
             {
                 SteamId = brief.SteamId,
@@ -350,6 +357,9 @@ namespace StudentAgeDialogueSave
                 AdapterVersion = "round-dialogue-v1",
                 Speaker = brief.Speaker,
                 Summary = brief.Summary,
+                BackgroundId=checkpoint.Dialogue.Value<int?>("background"),
+                PreviewImageUrl=(string)(checkpoint.Dialogue["cg"] as JObject)?["url"],
+                SpeakerId=checkpoint.Dialogue.Value<int?>("speakerId")??0,
                 RoleName = brief.RoleName,
                 YearLabel = brief.YearLabel,
                 SeasonLabel = brief.SeasonLabel,
@@ -362,12 +372,12 @@ namespace StudentAgeDialogueSave
             busy = true; int token = generation; var repo = repository;
             // The receipt finishes independently of the Unity dispatch queue. Once storage
             // starts, shutdown must not turn an actual commit into a cancellation result.
-            Task<CommitReceipt> receipt = Task.Run(() => repo.PublishChecked(envelope), shutdown).ContinueWith(task =>
+            Task<CommitReceipt> receipt = Task.Run(() => crossRun?repo.PublishReplacing(envelope,replacedRevisionId):repo.PublishChecked(envelope), shutdown).ContinueWith(task =>
             {
                 var outcome = new CommitReceipt();
                 if (task.IsCanceled) outcome.Result = new UiResult(false, "保存已取消。");
                 else if (task.IsFaulted) outcome.Result = new UiResult(false, "保存失败：" + task.Exception.GetBaseException().Message + " 已有存档保持不变。");
-                else { outcome.Record = task.Result; outcome.Result = new UiResult(true, "对话已保存到本机。"); }
+                else { outcome.Record = task.Result; if(crossRun)outcome.Records=repo.Scan(); outcome.Result = new UiResult(true, "对话已保存到本机。"); }
                 SafeLog(task.IsFaulted ? "保存对话档失败：" + task.Exception.GetBaseException() :
                     task.IsCanceled ? "保存尚未提交，已取消。" : "对话存档本地提交完成：" + outcome.Record.Header.RevisionId);
                 return outcome;
@@ -394,7 +404,7 @@ namespace StudentAgeDialogueSave
             {
                 if (token == generation)
                 {
-                    if (completed.Result.Success) { records.Add(completed.Record); Repository.FindHeads(records); RaiseRecordsChanged(); }
+                    if (completed.Result.Success) { if(completed.Records!=null)records=completed.Records;else records.Add(completed.Record); Repository.FindHeads(records); RaiseRecordsChanged(); }
                     else Refresh();
                 }
             }
@@ -512,7 +522,8 @@ namespace StudentAgeDialogueSave
             if (quickSaveRequested) return;
             StatusMessage = null;
             quickSaveRequested = true;
-            CompleteQuickSaveAsync();
+            try{StudentAgeDialogueSave.UI.AdvConfirmation.Ask("保存当前对话进度到快速存档吗？",CompleteQuickSaveAsync,()=>quickSaveRequested=false,key:"QuickSave");}
+            catch{quickSaveRequested=false;throw;}
         }
         async void CompleteQuickSaveAsync()
         {
@@ -524,13 +535,19 @@ namespace StudentAgeDialogueSave
                 if (snapshot == null) throw menuCaptureError ?? new InvalidOperationException("未能完成当前对话快照。");
                 await WaitForStoreAsync(shutdown);
                 if (epoch != captureEpochNumber) throw new OperationCanceledException();
-                var result = await PublishAsync(snapshot, DialogueUiCategory.Quick, 1, null);
+                var result = await PublishAsync(snapshot, DialogueUiCategory.Quick, NextQuickSlot(snapshot.Brief.RunId), null);
                 if (disposed) return;
                 if (!result.Success) Notify(result.Message);
             }
             catch (OperationCanceledException) { }
             catch (Exception ex) { Notify("快速保存未完成：" + ex.Message); }
             finally { quickSaveRequested = false; }
+        }
+        int NextQuickSlot(string run)
+        {
+            var latest=Repository.FindHeads(records).Where(r=>r.Header.Category=="quick" && r.Header.RunId==run)
+                .OrderByDescending(r=>r.Header.SavedUtc??r.Header.CreatedUtc,StringComparer.Ordinal).FirstOrDefault();
+            return latest!=null && int.TryParse(latest.Header.LogicalSlot,out int slot)?slot%12+1:1;
         }
         public void QuickLoad()
         {
@@ -550,10 +567,11 @@ namespace StudentAgeDialogueSave
                 if (records.Any(r => r.Status == SaveStatus.UnsupportedVersion && r.Header != null && r.Header.Category == "quick" && r.Header.RunId == brief.RunId && r.Header.SteamId == brief.SteamId))
                     throw new InvalidOperationException("快速档由较新版本创建，尚不能解析其格式。");
                 var heads = Repository.FindHeads(records).Where(r => r.Header.Category == "quick" && r.Header.RunId == brief.RunId && r.Header.SteamId == brief.SteamId).ToList();
-                if (heads.Count != 1) throw new InvalidOperationException(heads.Count == 0 ? "当前周目没有对话快速存档。" : "快速档存在设备分支，请从列表选择要读的一份。");
-                string revision = heads[0].Header.RevisionId;
-                HintHelper.ShowConfirm("加载快速对话存档将离开当前进度，是否继续？",
-                    () => Load(revision, r => { if (!r.IsPending) ReleaseQuickPause(); }), ReleaseQuickPause);
+                if(heads.Count==0)throw new InvalidOperationException("当前周目没有对话快速存档。");
+                if(heads.Any(r=>r.IsConflict))throw new InvalidOperationException("快速档存在设备分支，请从列表选择要读的一份。");
+                string revision=heads.OrderByDescending(r=>r.Header.SavedUtc??r.Header.CreatedUtc,StringComparer.Ordinal).First().Header.RevisionId;
+                StudentAgeDialogueSave.UI.AdvConfirmation.Ask("加载快速对话存档将离开当前进度，是否继续？",
+                    () => Load(revision, r => { if (!r.IsPending) ReleaseQuickPause(); }), ReleaseQuickPause,key:"QuickLoad");
             }
             catch (OperationCanceledException) { ReleaseQuickPause(); }
             catch (Exception ex) { ReleaseQuickPause(); Notify(ex.Message); }
@@ -588,6 +606,13 @@ namespace StudentAgeDialogueSave
             nextAutoTime = Time.realtimeSinceStartup + autoInterval;
             autoSaveRequested = true;
             CompleteAutoSaveAsync();
+        }
+        internal void WarmListing()
+        {
+            // Start the first verified index while the player is outside the save
+            // page. Existing results remain visible during later background scans.
+            if(disposed || initialized || IsListing || busy || Time.realtimeSinceStartup-lastScanTime<2 || !DialogueUiController.IsUiReady())return;
+            if(EnsureRepository(out _))Refresh();
         }
         async void CompleteAutoSaveAsync()
         {

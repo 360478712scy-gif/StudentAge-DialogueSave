@@ -23,7 +23,7 @@ public static class RuntimeRecoveryQA
         yield return until(()=>adapter.CanCapture(out _),25,"recovery source ready");
         var repo=new Repository(PathDefine.SAVE_PATH,Path.Combine(root,"data/recovery-stage"),Path.Combine(root,"data/recovery-backup"));
         var old=repo.Scan().Where(r=>r.Status==SaveStatus.Ready).OrderByDescending(r=>r.Header.CreatedUtc,StringComparer.Ordinal)
-            .Select(r=>new {Record=r,Save=repo.Load(r.Header.RevisionId)})
+            .Select(r=>new {Record=r,Save=SaveCodec.Decode(SaveCodec.Read(r.FilePath))})
             .First(x=>x.Save.Dialogue.Value<int>("talkId")==1900000001 &&
                 x.Save.Dialogue.Value<string>("configDigest")=="712AC7722CA6A34190D398BEA9DD531E403E897B1C95C49E9033FECA84617920" &&
                 x.Save.Dialogue["activeMods"] is JArray mods && mods.Count==0);
@@ -52,6 +52,9 @@ public static class RuntimeRecoveryQA
             reads.Add(new JObject{["attempt"]=i+1,["milliseconds"]=watch.ElapsedMilliseconds});
         }
         check(!adapter.IsPausedForMenu,"callback exceptions do not leak pause lease");
+        // This recovery timing fixture opts out of the newly optional prompt;
+        // prompt/queue behavior is covered by the settings interaction batch.
+        var quickConfirm=ConfirmationOptions.Entry(AdvDialogueController.Active.Configuration,"QuickSave");bool previousQuickConfirm=quickConfirm.Value;quickConfirm.Value=false;
         // A real quick-save goes through the service's capture and atomic publication.
         var before=repo.Scan().Select(r=>r.Header?.RevisionId).ToArray();
         var saveClock=System.Diagnostics.Stopwatch.StartNew();
@@ -70,6 +73,7 @@ public static class RuntimeRecoveryQA
         check(concurrent.Success,"load during save request succeeds");
         check(Hash(old.Record.FilePath)==hash,"concurrent operation preserves old archive");
         check(SaveMgr.GetPref("LatestSaveKey","")==latest,"all dialogue operations preserve ordinary save selection");
+        quickConfirm.Value=previousQuickConfirm;
         timing["oldHashAfter"]=Hash(old.Record.FilePath);
         timing["callbackFailuresRecovered"]=true;
         timing["loadDuringSaveSucceeded"]=true;

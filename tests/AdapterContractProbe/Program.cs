@@ -18,6 +18,22 @@ internal static class Program
             return File.Exists(file) ? AssemblyLoadContext.Default.LoadFromAssemblyPath(file) : null;
         };
         var game = AssemblyLoadContext.Default.LoadFromAssemblyPath(Path.Combine(managed, "Assembly-CSharp.dll"));
+        if(args.Contains("--ui-interaction"))
+        {
+            const BindingFlags uiFlags=BindingFlags.Instance|BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic;
+            var confirm=game.GetType("View.Hint.CommonComfirmView",true);
+            Require(confirm.GetMethod("OnOpen",uiFlags)!=null,"native confirmation open hook");
+            Require(confirm.GetField("ok",uiFlags)?.FieldType==typeof(Action),"native confirmation callback type");
+            var ask=game.GetType("HintHelper",true).GetMethod("ShowConfirm",uiFlags);
+            Require(ask.GetParameters().Select(p=>p.Name).SequenceEqual(new[]{"_desc","_ok","_close","_showCloseBtn","_title","_okTxt","_closeTxt","_tipsTxt","_enableCloseByRightClick"}),"native prompt Harmony argument contract");
+            var settings=game.GetType("View.Main.SettingView",true);
+            Require(settings.GetField("dropdown_lanuage",uiFlags)!=null,"native language selector field");
+            var ui=AssemblyLoadContext.Default.LoadFromAssemblyPath(Path.Combine(managed,"UnityEngine.UI.dll"));
+            Require(ui.GetType("UnityEngine.UI.Selectable",true).GetMethod("DoStateTransition",uiFlags)?.IsVirtual==true,"pressed state transition override");
+            foreach(string name in new[]{"OnPointerDown","OnPointerUp","OnPointerEnter","OnPointerExit"})
+                Require(ui.GetType("UnityEngine.UI.Button",true).GetMethod(name,uiFlags)?.IsVirtual==true,"pointer override "+name);
+            Console.WriteLine("UI_INTERACTION_CONTRACT_PASS "+checks+" (metadata only; no game execution)");return;
+        }
         var talk = game.GetType("View.Evt.NewTalkView", true);
         var fields = new[] { "cfg", "talkType", "evtId", "talkId", "roles", "posRoles", "roleCloths", "historys", "curBgId", "lastEffectCfgId", "waitFrame", "enableAutoTalk", "isDelaying", "isPhoneing", "isShowingCG", "isShowingComic", "countdown", "talkingPos", "talkingRoles", "playEvtGroupBgm", "enableSceneSound", "topSeq", "topSeq2", "topWaitSeq", "curVFX" };
         const BindingFlags flags = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;

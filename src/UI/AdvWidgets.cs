@@ -9,23 +9,9 @@ namespace StudentAgeDialogueSave.UI
 {
     // Vertex colours give the dialogue a genuinely transparent upper edge. No
     // full-screen blur, render texture, shader animation or per-frame mesh rebuild.
-    internal sealed class AdvVeil : MaskableGraphic
+    internal sealed class AdvVeil : RawImage
     {
-        internal void SetDark(bool dark){color=dark?new Color(.075f,.072f,.068f,.72f):new Color(.98f,.973f,.949f,.87f);}
-        protected override void OnPopulateMesh(VertexHelper vh)
-        {
-            vh.Clear(); var r=rectTransform.rect;
-            float[] stops={0,.24f,.58f,.82f,1};
-            float[] alpha={.99f,.97f,.9f,.48f,0};
-            for(int i=0;i<stops.Length;i++)
-            {
-                float y=r.yMin+r.height*stops[i];
-                var c=color;c.a*=alpha[i];
-                vh.AddVert(new Vector3(r.xMin,y),c,Vector2.zero);
-                vh.AddVert(new Vector3(r.xMax,y),c,Vector2.one);
-                if(i>0){int n=i*2;vh.AddTriangle(n-2,n-1,n);vh.AddTriangle(n-1,n+1,n);}
-            }
-        }
+        internal void SetReadingTone(){texture=AdvSkin.Texture("window.png");color=new Color(.28f,.3f,.48f,1);}
     }
 
     internal sealed class AdvPaper : MaskableGraphic
@@ -60,6 +46,19 @@ namespace StudentAgeDialogueSave.UI
 
     internal sealed class AdvButton : Button
     {
+        bool held;
+        protected override void DoStateTransition(SelectionState state,bool instant)
+        {base.DoStateTransition(held && IsInteractable()?SelectionState.Pressed:state,instant);}
+        public override void OnPointerDown(UnityEngine.EventSystems.PointerEventData e)
+        {if(e.button==UnityEngine.EventSystems.PointerEventData.InputButton.Left && IsInteractable())held=true;base.OnPointerDown(e);}
+        public override void OnPointerUp(UnityEngine.EventSystems.PointerEventData e)
+        {if(e.button==UnityEngine.EventSystems.PointerEventData.InputButton.Left)held=false;base.OnPointerUp(e);}
+        protected override void OnDisable(){held=false;base.OnDisable();}
+        protected override void Awake()
+        {base.Awake();onClick.AddListener(()=>{if(IsInteractable())AdvSkin.PlayClick(false);});}
+        public override void OnPointerEnter(UnityEngine.EventSystems.PointerEventData eventData)
+        {base.OnPointerEnter(eventData);if(!held && IsActive() && IsInteractable())AdvSkin.PlayHover();}
+
         public override void OnSubmit(UnityEngine.EventSystems.BaseEventData eventData)
         {
             if(AdvDialogueController.Active?.HandleSpace()==true){eventData.Use();return;}
@@ -73,9 +72,16 @@ namespace StudentAgeDialogueSave.UI
             Gold=new Color32(189,161,114,255), Paper=new Color32(250,248,242,255), Muted=new Color32(103,91,73,255),
             DarkPaper=new Color(.075f,.072f,.068f,.93f);
         static readonly Dictionary<TMP_FontAsset,Material> outlined=new Dictionary<TMP_FontAsset,Material>();
+        static readonly Dictionary<TMP_FontAsset,Material> lightOutlined=new Dictionary<TMP_FontAsset,Material>();
+        static readonly Dictionary<TMP_FontAsset,Material> dialogueOutlined=new Dictionary<TMP_FontAsset,Material>();
+        static readonly Dictionary<TMP_FontAsset,Material> tabOutlined=new Dictionary<TMP_FontAsset,Material>();
         static TMP_FontAsset readingFont;
+        // Local preview may supply a process-private font; no system font file is shipped.
+        internal static TMP_FontAsset DialogueFontOverride;
         internal static TMP_FontAsset ReadingFont(TMP_FontAsset fallback,bool refresh=false)
         {
+            var chinese=AdvChineseFont.Get(fallback);
+            if(chinese!=null)return chinese;
             if(readingFont!=null && !refresh)return readingFont;
             var fonts=Resources.FindObjectsOfTypeAll<TMP_FontAsset>();
             readingFont=fonts.FirstOrDefault(f=>f.name=="SourceHanSansCN-Medium SDF")??
@@ -92,7 +98,36 @@ namespace StudentAgeDialogueSave.UI
             if(material.HasProperty("_OutlineSoftness"))material.SetFloat("_OutlineSoftness",0);
             material.DisableKeyword("OUTLINE_ON");outlined[font]=material;return material;
         }
-        internal static void ReleaseMaterials(){foreach(var m in outlined.Values)if(m!=null)UnityEngine.Object.Destroy(m);outlined.Clear();readingFont=null;}
+        internal static Material LightOutline(TMP_FontAsset font)
+        {
+            if(lightOutlined.TryGetValue(font,out var m) && m!=null)return m;
+            m=new Material(Outline(font)){name="ADV.LightReadingInk"};
+            if(m.HasProperty("_OutlineWidth"))m.SetFloat("_OutlineWidth",.085f);
+            if(m.HasProperty("_OutlineColor"))m.SetColor("_OutlineColor",new Color(.12f,.12f,.14f,.8f));
+            m.EnableKeyword("OUTLINE_ON");lightOutlined[font]=m;return m;
+        }
+        internal static Material DialogueShadow(TMP_FontAsset font)
+        {
+            if(dialogueOutlined.TryGetValue(font,out var m) && m!=null)return m;
+            m=new Material(LightOutline(font)){name="ADV.DialogueShadow"};
+            m.SetFloat("_OutlineWidth",.12f);m.SetColor("_OutlineColor",new Color(0,0,0,.95f));
+            m.SetColor("_UnderlayColor",new Color(0,0,0,.85f));
+            m.SetFloat("_UnderlayOffsetX",.55f);m.SetFloat("_UnderlayOffsetY",-.65f);
+            m.SetFloat("_UnderlayDilate",.08f);m.SetFloat("_UnderlaySoftness",.12f);m.EnableKeyword("UNDERLAY_ON");
+            dialogueOutlined[font]=m;return m;
+        }
+        internal static Material TabOutline(TMP_FontAsset font)
+        {
+            if(tabOutlined.TryGetValue(font,out var material) && material!=null)return material;
+            material=new Material(Outline(font)){name="ADV.SettingsTabInk",hideFlags=HideFlags.HideAndDontSave};
+            material.SetColor("_FaceColor",new Color32(0,34,68,255));
+            material.SetColor("_OutlineColor",new Color32(255,249,239,255));
+            material.SetFloat("_OutlineWidth",.35f);material.SetFloat("_OutlineSoftness",.01f);
+            material.EnableKeyword("OUTLINE_ON");tabOutlined[font]=material;return material;
+        }
+        internal static void ReleaseMaterials(){foreach(var m in outlined.Values)if(m!=null)UnityEngine.Object.Destroy(m);outlined.Clear();foreach(var m in lightOutlined.Values)if(m!=null)UnityEngine.Object.Destroy(m);lightOutlined.Clear();foreach(var m in tabOutlined.Values)if(m!=null)UnityEngine.Object.Destroy(m);tabOutlined.Clear();foreach(var m in dialogueOutlined.Values)if(m!=null)UnityEngine.Object.Destroy(m);dialogueOutlined.Clear();readingFont=null;
+            AdvChineseFont.Release();
+        }
         internal static void ThemeButton(Button b,bool filled,bool dark)
         {
             var cs=b.colors;cs.normalColor=filled?(dark?DarkPaper:Paper):new Color(1,1,1,.02f);

@@ -1,0 +1,7 @@
+{
+  "tool": "built-in image_gen",
+  "header_prompt": "Use case: ui-mockup. Create a production visual novel confirmation dialog HEADER TEXTURE only. Reference is original game confirmation frame: match the subtle matte paper/screenprint texture density of its yellow upper area, but redesign for StudentAge blue campus theme. Output rectangular 1536x512 edge-to-edge artwork, no exterior transparency needed. Light sky blue and cyan #65cff0 to #249edf, quiet wide empty center and right for dark navy question text later. On far left 15% a very subtle dark-blue paper airplane silhouette and exclamation mark motif, no guitar pick, no lemons, no writing, no words. Small torn-paper and ink details restrained at outer corners. Matte flat graphic, no gloss, no light rays, no 3D. This is only the replacement for the yellow area: do not draw white panel, border, buttons, circles, checkbox, text or dialog frame. Keep broad center calm and readable.",
+  "header_source": "exec-9ad5fae0-9b1a-428c-9e7f-1f06d3cef53c.png",
+  "frame_and_controls": "limelight-ui-extraction/sprites/uipsd/dialog_jp",
+  "composition": "Original white region and frame preserved. Only original yellow header coverage is replaced by generated blue header; orange control-state pixels mapped to campus blue at initial import."
+}

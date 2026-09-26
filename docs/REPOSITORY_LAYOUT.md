@@ -9,10 +9,14 @@
 | `tests/HistoryTrailCheck/` | 历史检查点编码、兼容及非法格式 | 是 |
 | `tests/ConfigSchemaCheck/`、`tests/AdapterContractProbe/` | 需要本机游戏程序集的结构检查 | 是 |
 | `tests/Runtime*QA.cs`、`tests/QaIsolation.cs` | 隔离玩家中的实际交互测试与路径重定向 | 是 |
-| `tools/` | 构建、统一测试、隔离克隆与只读基线工具 | 是 |
+| `tools/` | 构建、统一测试、隔离克隆、只读基线及 knowledge.py 检索 | 是 |
+| `docs/knowledge/` | 唯一精简 JSON 知识库及维护说明，不存全文日志 | 是 |
+| `assets/adv-skin/` | UI 素材、生成提示词和来源记录 | 是 |
 | `docs/reviews/` | 早期专项审查记录；当前状态以 STATUS 为准 | 是 |
 | `qa/` | 游戏副本、fixture、截图、日志、基线与临时环境 | 否 |
 | `research/` | 本地反编译研究资料 | 否 |
 | `dist/`、`**/bin/`、`**/obj/` | 构建输出及缓存 | 否 |
 
 不移动或清理用户的本地存档来整理 Git 仓库。所有产物由 `.gitignore` 排除；首次上传不包含游戏 DLL、真实存档、Steam 用户目录或反编译游戏源码。
+
+- ADV存档入口：`src/UI/AdvSavePage.cs`；资源/异步预览/原版桥接：`AdvArchiveSkin.cs`、`ArchivePreview.cs`、`NativeArchiveBrowser.cs`。不可变编辑与原版文件安全分别在 `src/Storage/RepositoryEdits.cs` 和 `NativeSlotEdits.cs`；素材来源 `assets/adv-skin/archive-provenance.json`。

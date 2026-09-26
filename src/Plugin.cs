@@ -21,7 +21,7 @@ namespace StudentAgeDialogueSave
     public sealed class DialogueSavePlugin : BaseUnityPlugin
     {
         public const string Id = "local.studentage.dialoguesave";
-        public const string Version = "0.1.5";
+        public const string Version = "0.2.1";
         internal static DialogueRuntimeHost Host;
         void Awake()
         {
@@ -77,12 +77,22 @@ namespace StudentAgeDialogueSave
             adapter.Install(harmony);
             service = new DialogueSaveService(adapter, Post, message => log.LogInfo(message), NextFrame, shutdown.Token, auto, interval);
             ComicPresentationAdapter.Install(harmony);
+            NativeFightInputFix.Install(harmony);
+            DialogueUiResourceLease.Install(harmony);
             exitSave = new DialogueExitSave(service, NextFrame, message => log.LogInfo(message), harmony);
             ui = new DialogueUiController(service, message => log.LogInfo(message));
             ui.Install(harmony);
             service.RecordsChanged += ui.RefreshRecords;
             adv = new AdvDialogueController(adapter, ui, service, uiMode, shutdown.Token, message => log.LogInfo(message), harmony);
+            StartCoroutine(WarmSettings());
             log.LogInfo("对话存档已初始化；实际可用范围由对话来源与稳定状态检查决定。");
+        }
+        System.Collections.IEnumerator WarmSettings()
+        {
+            while(!disposed && (adv?.IsAdv!=true || !DialogueUiController.IsUiReady()))yield return null;
+            if(!disposed)yield return AdvSettingsSkin.Warm();
+            if(!disposed)yield return AdvBacklogSkin.Warm();
+            if(!disposed)yield return AdvArchiveSkin.Warm();
         }
         internal void Post(Action action)
         {
@@ -119,9 +129,10 @@ namespace StudentAgeDialogueSave
                 lock (dispatch) { if (dispatch.Count == 0) break; action = dispatch.Dequeue(); }
                 try { action(); } catch (Exception ex) { log?.LogError("对话存档异步回调失败：" + ex); }
             }
-            try { adv?.Tick(); } catch (Exception ex) { log?.LogWarning("ADV界面更新失败：" + ex.Message); }
+            try { ComicPresentationAdapter.Tick(); adv?.Tick(); } catch (Exception ex) { log?.LogWarning("ADV界面更新失败：" + ex.Message); }
             if (Time.realtimeSinceStartup < nextAutoCheck) return;
             nextAutoCheck = Time.realtimeSinceStartup + 1f;
+            try { service?.WarmListing(); } catch(Exception ex){log?.LogWarning("存档目录预读失败："+ex.Message);}
             try
             {
                 // These actions remain available throughout dialogue playback; transient
@@ -137,9 +148,11 @@ namespace StudentAgeDialogueSave
         void Shutdown()
         {
             if (disposed) return; disposed = true;
+            StopAllCoroutines();
             try
             {
                 Cleanup(() => exitSave?.Dispose());
+                Cleanup(() => ComicPresentationAdapter.Clear());
                 Cleanup(() => adv?.Dispose());
                 Cleanup(() => service?.Dispose());
                 Cleanup(() => ui?.Dispose());

@@ -26,6 +26,7 @@ public sealed class DialogueQaPlugin:BaseUnityPlugin
     {
         string root=Paths.GameRootPath;
         if(!root.Replace('\\','/').EndsWith("/student-age-dialogue-save/qa/runtime"))throw new Exception("QA only");
+        if(File.Exists(Path.Combine(root,"sisi-up-mode.txt")))RuntimeSisiQA.Prepare(root);
         var obj=new GameObject("DialogueQA.PersistentHost");obj.hideFlags=HideFlags.HideAndDontSave;DontDestroyOnLoad(obj);
         obj.AddComponent<DialogueQaDriver>().Initialize(root,Logger);
     }
@@ -42,8 +43,9 @@ public sealed class DialogueQaDriver:MonoBehaviour
         if(File.Exists(Path.Combine(root,"adv-mode.txt")))RuntimeAdvQA.IsolateInput(true);
         var stack=new Stack<IEnumerator>();stack.Push(Run());bool failed=false;
         while(stack.Count>0){bool more=false;object next=null;try{more=stack.Peek().MoveNext();if(more)next=stack.Peek().Current;}catch(Exception ex){failed=true;File.WriteAllText(Path.Combine(output,"failed.txt"),ex.ToString());log.LogError(ex);}if(failed)break;if(!more){stack.Pop();continue;}var nested=next as IEnumerator;if(nested!=null){stack.Push(nested);continue;}yield return next;}
+        if(failed){yield return new WaitForEndOfFrame();ScreenCapture.CaptureScreenshot(Path.Combine(output,"failed-screen.png"));yield return null;}
         RuntimeAdvQA.IsolateInput(false);
-        if(!failed)File.WriteAllText(Path.Combine(output,"success.txt"),File.Exists(Path.Combine(root,"feedback-mode.txt")) ? "DIALOGUE_FEEDBACK_FIXES_OK" : File.Exists(Path.Combine(root,"hotfix-mode.txt")) ? "DIALOGUE_HOTFIX_RUNTIME_OK" : File.Exists(Path.Combine(root,"adv-only.txt")) ? "DIALOGUE_ADV_FIRST_FRAME_AND_LOG_PREVIEW_OK" : File.Exists(Path.Combine(root,"adv-mode.txt")) ? "DIALOGUE_ADV_FUNCTIONAL_OK_PERFORMANCE_SEPARATE" : File.Exists(Path.Combine(root,"recovery-mode.txt")) ? "DIALOGUE_RECOVERY_RUNTIME_OK" : File.Exists(Path.Combine(root,"font-mode.txt")) ? "DIALOGUE_FONT_RUNTIME_OK" : File.Exists(Path.Combine(root,"controls-mode.txt")) ? "DIALOGUE_CONTROLS_RUNTIME_OK" : File.Exists(Path.Combine(root,"preview-mode.txt")) ? "DIALOGUE_LOAD_UI_PREVIEW_OK" : "DIALOGUE_ISOLATED_RUNTIME_OK");
+        if(!failed)File.WriteAllText(Path.Combine(output,"success.txt"),File.Exists(Path.Combine(root,"sisi-up-mode.txt")) ? "SISI_AUTHORED_PRESENTATION_WITH_UP_OK" : File.Exists(Path.Combine(root,"archive-mode.txt")) ? "DIALOGUE_ARCHIVE_AND_INTERACTION_OK" : File.Exists(Path.Combine(root,"feedback-mode.txt")) ? "DIALOGUE_FEEDBACK_FIXES_OK" : File.Exists(Path.Combine(root,"hotfix-mode.txt")) ? "DIALOGUE_HOTFIX_RUNTIME_OK" : File.Exists(Path.Combine(root,"adv-only.txt")) ? "DIALOGUE_ADV_FIRST_FRAME_AND_LOG_PREVIEW_OK" : File.Exists(Path.Combine(root,"adv-mode.txt")) ? "DIALOGUE_ADV_FUNCTIONAL_OK_PERFORMANCE_SEPARATE" : File.Exists(Path.Combine(root,"recovery-mode.txt")) ? "DIALOGUE_RECOVERY_RUNTIME_OK" : File.Exists(Path.Combine(root,"font-mode.txt")) ? "DIALOGUE_FONT_RUNTIME_OK" : File.Exists(Path.Combine(root,"controls-mode.txt")) ? "DIALOGUE_CONTROLS_RUNTIME_OK" : File.Exists(Path.Combine(root,"preview-mode.txt")) ? "DIALOGUE_LOAD_UI_PREVIEW_OK" : "DIALOGUE_ISOLATED_RUNTIME_OK");
         if(!failed && File.Exists(Path.Combine(root,"preview-mode.txt"))) yield break;
         yield return new WaitForSecondsRealtime(2);Application.Quit();
     }
@@ -55,8 +57,9 @@ public sealed class DialogueQaDriver:MonoBehaviour
         yield return Until(()=>UIMgr.IsViewOpened<EntryView>(),90,"entry loaded");
         Check(PathDefine.SAVE_PATH.Replace('\\','/').Contains("/student-age-dialogue-save/qa/runtime/data/"),"managed save path isolated");
         Check(Application.companyName=="DlgSaveQA" && Application.productName=="DialogSave","native player identity isolated");
-        RuntimeCompatibilityQA.Install(root, Check);
-        File.WriteAllText(Path.Combine(output,"compatibility-checks.txt"), RuntimeCompatibilityQA.RunPureSelfChecks());
+        if(File.Exists(Path.Combine(root,"sisi-up-mode.txt"))) RuntimeSisiQA.Validate(root,Check);
+        else { RuntimeCompatibilityQA.Install(root, Check);
+        File.WriteAllText(Path.Combine(output,"compatibility-checks.txt"), RuntimeCompatibilityQA.RunPureSelfChecks()); }
         var host=Resources.FindObjectsOfTypeAll<DialogueRuntimeHost>().FirstOrDefault();Check(host!=null,"persistent runtime host remains after native bootstrap");
         adapter=(DialogueCheckpointAdapter)AccessTools.Field(typeof(DialogueRuntimeHost),"adapter").GetValue(host);
         ui=(DialogueUiController)AccessTools.Field(typeof(DialogueRuntimeHost),"ui").GetValue(host);
@@ -75,6 +78,8 @@ public sealed class DialogueQaDriver:MonoBehaviour
         }
         if(File.Exists(Path.Combine(root,"adv-mode.txt")) && !File.Exists(Path.Combine(root,"adv-only.txt")))
             yield return RuntimeAdvQA.FirstRun(Check,Until,root);
+        var startupStyle=AdvDialogueController.Active.Mode;
+        AdvDialogueController.Active.SelectMode("Original"); // This bootstrap validates the native nine-slot page.
         SaveMgr.SetPref("LatestSaveKey","QA_SENTINEL");
         UIMgr.OpenView<SaveView>(UILayerType.None,null,new object[]{false});
         yield return Until(()=>UIMgr.IsViewOpened<SaveView>(),20,"native load window");yield return new WaitForSecondsRealtime(3);
@@ -83,6 +88,7 @@ public sealed class DialogueQaDriver:MonoBehaviour
         ClickNativeManual();yield return new WaitForSecondsRealtime(.3f);
         Check(((SaveView)UIMgr.GetView<SaveView>()).tabgroup_top.GetCells().Count==3,"ordinary three load tabs preserved");
         UIMgr.CloseView<SaveView>();
+        AdvDialogueController.Active.SelectMode(startupStyle);
         // Fixture dependencies are historical test data. Stop its asynchronous Steam
         // title lookup before loading, so a late warning cannot cover QA screenshots.
         new Harmony("dialogue.qa.fixture-mods").Patch(AccessTools.Method(typeof(ProfileMgr),"ValidateModList"),prefix:new HarmonyMethod(typeof(DialogueQaDriver),nameof(SkipFixtureWarning)));
@@ -128,6 +134,7 @@ public sealed class DialogueQaDriver:MonoBehaviour
         var evt=Singleton<CommonEvtMgr>.Ins;
         var model=(CommonEvtModel)AccessTools.Field(typeof(CommonEvtMgr),"model").GetValue(evt);model.evtQueues.Clear();
         ((Queue<int>)AccessTools.Field(typeof(CommonEvtMgr),"roundEndEventQueue").GetValue(evt)).Clear();
+        if(File.Exists(Path.Combine(root,"sisi-up-mode.txt"))) {yield return RuntimeSisiQA.Run(adapter,Check,Until,root);yield break;}
         int bg=Cfg.BgCfgMap.Keys.First(id=>id>0);
         var originalTalk=Cfg.TalkCfgMap.Values.First(t=>t.bg>0 && t.roleIds!=null && t.roleIds.Count>0 && !string.IsNullOrEmpty(t.content));
         bg=originalTalk.bg;
@@ -148,8 +155,18 @@ public sealed class DialogueQaDriver:MonoBehaviour
             SaveMgr.SetPref("LatestSaveKey","QA_SENTINEL");
         }
         if(File.Exists(Path.Combine(root,"adv-only.txt")))gameObject.AddComponent<AdvFirstFrameQA>();
+        if(File.Exists(Path.Combine(root,"local-font-preview.txt")))RuntimeSkinQA.LoadLocalFont(root);
+        if(File.Exists(Path.Combine(root,"archive-controls.txt")))
+        {var person=Cfg.PersonCfgMap.Values.Single(p=>p.name=="肖清雅");foreach(int id in new[]{1900000001,1900000002}){Cfg.TalkCfgMap[id].roleIds=new List<int>{person.id};Cfg.TalkCfgMap[id].roleName=null;}}
         evt.EnqueueEvt(0,1);evt.ShowNewRoundEvent();
         yield return Until(()=>adapter.IsSupportedDialogueContext,20,"native queued dialogue tracked");
+        if(File.Exists(Path.Combine(root,"archive-routing.txt"))) {yield return RuntimeArchiveRoutingQA.Run(adapter,ui,(DialogueSaveService)service,Check,Until,root);yield break;}
+        if(File.Exists(Path.Combine(root,"perf-sweep.txt"))) {yield return RuntimePerfSweepQA.Run(adapter,Check,Until,root);yield break;}
+        if(File.Exists(Path.Combine(root,"final-batch.txt"))) {yield return RuntimeFinalBatchQA.Run(adapter,ui,(DialogueSaveService)service,Check,Until,root);yield break;}
+        if(File.Exists(Path.Combine(root,"modal-eight.txt"))) {yield return RuntimeModalEightQA.Run(adapter,ui,(DialogueSaveService)service,Check,Until,root);yield break;}
+        if(File.Exists(Path.Combine(root,"archive-controls.txt"))) {yield return RuntimeArchiveControlsQA.Run(adapter,ui,(DialogueSaveService)service,Check,Until,root);yield break;}
+        if(File.Exists(Path.Combine(root,"archive-six.txt"))) {yield return RuntimeArchiveSixQA.Run(adapter,ui,(DialogueSaveService)service,Check,Until,root);yield break;}
+        if(File.Exists(Path.Combine(root,"archive-refine.txt"))) {yield return RuntimeArchiveRefineQA.Run(adapter,ui,(DialogueSaveService)service,Check,Until,root);yield break;}
         if(File.Exists(Path.Combine(root,"presentation-visual.txt")))
         {
             yield return RuntimePresentationQA.Visual(adapter,Check,Until,root);yield break;
@@ -164,6 +181,9 @@ public sealed class DialogueQaDriver:MonoBehaviour
             yield return RuntimeFeedbackQA.Run(adapter,Check,Until,root);
             yield break;
         }
+        if(File.Exists(Path.Combine(root,"lifecycle-mode.txt"))){yield return RuntimeLifecycleQA.Run(adapter,ui,Check,Until,root);yield break;}
+        if(File.Exists(Path.Combine(root,"archive-mode.txt")))
+        {if(!File.Exists(Path.Combine(root,"interaction-only.txt")))yield return RuntimeArchiveQA.Run(adapter,ui,service,Check,Until,root);yield return RuntimeInteractionQA.Run(adapter,(DialogueSaveService)service,Check,Until,root);if(!File.Exists(Path.Combine(root,"settings-mode.txt")))yield break;}
         if(File.Exists(Path.Combine(root,"hotfix-mode.txt")))
         {
             yield return RuntimeHotfixQA.Run(adapter,ui,service,Check,Until,root);
@@ -171,7 +191,16 @@ public sealed class DialogueQaDriver:MonoBehaviour
         }
         if(File.Exists(Path.Combine(root,"adv-mode.txt")))
         {
-            if(File.Exists(Path.Combine(root,"adv-only.txt")))yield return RuntimeAdvQA.Preview(adapter,service,Check,Until,root);
+            if(File.Exists(Path.Combine(root,"cg-visual.txt")))yield return RuntimeCgQA.Run(adapter,Check,Until,root);
+            else if(File.Exists(Path.Combine(root,"backlog-visual.txt")))yield return RuntimeBacklogQA.Run(adapter,Check,Until,root);
+            else if(File.Exists(Path.Combine(root,"settings-mode.txt")))
+            {
+                yield return RuntimeSettingsQA.Run(adapter,Check,Until,root);
+                if(File.Exists(Path.Combine(root,"batch-visual.txt")))
+                {yield return Until(()=>AdvSettingsTransition.Active==null,10,"settings appearance test close completed");yield return RuntimeBacklogQA.Run(adapter,Check,Until,root);yield return RuntimeCgQA.Run(adapter,Check,Until,root);}
+            }
+            else if(File.Exists(Path.Combine(root,"skin-mode.txt")))yield return RuntimeSkinQA.Run(adapter,Check,Until,root);
+            else if(File.Exists(Path.Combine(root,"adv-only.txt")))yield return RuntimeAdvQA.Preview(adapter,service,Check,Until,root);
             else yield return RuntimeAdvQA.Run(adapter,ui,service,Check,Until,root);
             yield break;
         }

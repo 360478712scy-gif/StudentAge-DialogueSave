@@ -30,10 +30,23 @@ namespace StudentAgeDialogueSave.Storage
         // Build tokens ourselves so duplicate keys cannot silently replace metadata.
         internal static JObject Read(string path)
         {
-            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            return Read(ReadBytes(path));
+        }
+        internal static byte[] ReadBytes(string path)
+        {
+            using(var stream=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read))
             {
-                if (stream.Length <= 0 || stream.Length > MaximumFileBytes)
-                    throw new InvalidDataException("存档大小超出限制。");
+                if(stream.Length<=0 || stream.Length>MaximumFileBytes)throw new InvalidDataException("存档大小超出限制。");
+                var bytes=new byte[(int)stream.Length];int offset=0,count;
+                while(offset<bytes.Length && (count=stream.Read(bytes,offset,bytes.Length-offset))>0)offset+=count;
+                if(offset!=bytes.Length || stream.ReadByte()!=-1)throw new InvalidDataException("读取时存档长度发生变化。");
+                return bytes;
+            }
+        }
+        internal static JObject Read(byte[] bytes)
+        {
+            using(var stream=new MemoryStream(bytes,false))
+            {
                 using (var text = new StreamReader(stream, Utf8, false))
                 using (var reader = new JsonTextReader(text) { MaxDepth = 64, DateParseHandling = DateParseHandling.None })
                 {
@@ -88,21 +101,29 @@ namespace StudentAgeDialogueSave.Storage
             // An explicit world length separates arbitrary world bytes from dialogue JSON.
             byte[] dialogue = Utf8.GetBytes(value.Dialogue.ToString(Formatting.None));
             if (dialogue.Length > MaximumDialogueBytes) throw new InvalidDataException("对话状态过大。");
-            using (var stream = new MemoryStream())
+            using (var sha=SHA256.Create())
+            using (var stream = new CryptoStream(Stream.Null,sha,CryptoStreamMode.Write))
             using (var writer = new BinaryWriter(stream))
             {
                 writer.Write(value.World.Length); writer.Write(value.World);
                 writer.Write(dialogue.Length); writer.Write(dialogue); writer.Flush();
-                return Hash(stream.ToArray());
+                stream.FlushFinalBlock();return Hex(sha.Hash);
             }
         }
 
         internal static string EnvelopeHash(JObject token)
         {
-            var copy = (JObject)token.DeepClone();
-            copy.Remove("EnvelopeSha256");
-            return Hash(Utf8.GetBytes(copy.ToString(Formatting.None)));
+            using(var sha=SHA256.Create())
+            using(var stream=new CryptoStream(Stream.Null,sha,CryptoStreamMode.Write))
+            using(var text=new StreamWriter(stream,Utf8,4096,true))
+            using(var writer=new JsonTextWriter(text){Formatting=Formatting.None,Culture=CultureInfo.InvariantCulture})
+            {
+                writer.WriteStartObject();
+                foreach(var property in token.Properties())if(property.Name!="EnvelopeSha256")property.WriteTo(writer);
+                writer.WriteEndObject();writer.Flush();text.Flush();stream.FlushFinalBlock();return Hex(sha.Hash);
+            }
         }
+        static string Hex(byte[] hash)=>BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
 
         internal static SaveEnvelope Decode(JObject token)
         {
@@ -146,6 +167,9 @@ namespace StudentAgeDialogueSave.Storage
             }
             if ((h.Speaker != null && h.Speaker.Length > 512) || (h.Summary != null && h.Summary.Length > 4096))
                 throw new InvalidDataException("存档摘要过长。");
+            if(h.TransactionId!=null)Revision(h.TransactionId);
+            if(h.SavedUtc!=null && (!DateTime.TryParseExact(h.SavedUtc,"O",CultureInfo.InvariantCulture,DateTimeStyles.RoundtripKind,out var savedAt) || savedAt.Kind!=DateTimeKind.Utc))throw new InvalidDataException("无效原保存时间。");
+            if(h.Comment!=null && h.Comment.Length>4096)throw new InvalidDataException("备注过长。");
             foreach (string label in new[] { h.RoleName, h.YearLabel, h.SeasonLabel, h.Location })
                 if (label != null && label.Length > 512) throw new InvalidDataException("存档显示字段过长。");
         }

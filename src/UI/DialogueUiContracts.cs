@@ -14,6 +14,9 @@ namespace StudentAgeDialogueSave.UI
         public int Slot;
         public string Speaker = "";
         public string Summary = "";
+        public string Comment;
+        public int BackgroundId,SpeakerId;
+        public string PreviewImageUrl;
         public DateTime CreatedUtc;
         public string RoleName = "";
         public string YearLabel = "";

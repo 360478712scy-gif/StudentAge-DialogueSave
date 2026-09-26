@@ -4,10 +4,12 @@ import ast
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 
 def main():
+    subprocess.run([sys.executable, str(ROOT / "tools/knowledge.py"), "--check"], cwd=ROOT, check=True)
     dotnet = shutil.which("dotnet")
     if not dotnet and Path("/usr/local/share/dotnet/dotnet").is_file():
         dotnet = "/usr/local/share/dotnet/dotnet"

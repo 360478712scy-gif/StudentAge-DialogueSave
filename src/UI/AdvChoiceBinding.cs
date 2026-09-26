@@ -18,6 +18,7 @@ namespace StudentAgeDialogueSave.UI
         GameObject tooltipLayer;
         Transform tooltip,tooltipParent;
         int tooltipSibling;
+        AdvChoiceTooltipSkin tooltipSkin;
 
         internal void Bind(Button target,Sdk.UIButton native)
         {
@@ -57,7 +58,7 @@ namespace StudentAgeDialogueSave.UI
             if(description==null || !description.isEnter || Singleton<DescCtrl>.Ins.comp!=description || !UIMgr.IsViewOpened<DescriptionView>())
             {RestoreTooltipLayer();return;}
             if(tooltipLayer!=null)return;
-            var view=UIMgr.GetView<DescriptionView>();
+            var view=(DescriptionView)UIMgr.GetView<DescriptionView>();
             var nativeCanvas=view.gameObject.GetComponentInParent<Canvas>();
             if(nativeCanvas==null)return;
             // Camera-space native tips would otherwise be covered by ADV's overlay
@@ -70,10 +71,12 @@ namespace StudentAgeDialogueSave.UI
             scaler.referencePixelsPerUnit=nativeCanvas.rootCanvas.referencePixelsPerUnit;
             tooltip=view.gameObject.transform;tooltipParent=tooltip.parent;tooltipSibling=tooltip.GetSiblingIndex();
             tooltip.SetParent(tooltipLayer.transform,false);
+            tooltipSkin=new AdvChoiceTooltipSkin(view);
         }
 
         void RestoreTooltipLayer()
         {
+            tooltipSkin?.Dispose();tooltipSkin=null;
             if(tooltip!=null && tooltipParent!=null)
             {tooltip.SetParent(tooltipParent,false);tooltip.SetSiblingIndex(tooltipSibling);}
             tooltip=null;tooltipParent=null;

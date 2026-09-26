@@ -16,6 +16,7 @@ namespace StudentAgeDialogueSave.Storage
 
     public sealed class SaveHeader
     {
+        internal SaveHeader DetachedCopy(){var copy=(SaveHeader)MemberwiseClone();copy.ParentRevisionIds=ParentRevisionIds==null?null:(string[])ParentRevisionIds.Clone();return copy;}
         public string SteamId;
         public string RunId;
         public string Category;
@@ -36,10 +37,16 @@ namespace StudentAgeDialogueSave.Storage
         public string Location;
         public int? Gender;
         public int? GradeState;
+        [Newtonsoft.Json.JsonProperty(NullValueHandling=Newtonsoft.Json.NullValueHandling.Ignore)] public string Comment;
+        [Newtonsoft.Json.JsonProperty(NullValueHandling=Newtonsoft.Json.NullValueHandling.Ignore)] public string SavedUtc;
+        [Newtonsoft.Json.JsonProperty(NullValueHandling=Newtonsoft.Json.NullValueHandling.Ignore)] public string TransactionId;
+        [Newtonsoft.Json.JsonProperty(NullValueHandling=Newtonsoft.Json.NullValueHandling.Ignore)] public int? BackgroundId;
+        [Newtonsoft.Json.JsonProperty(NullValueHandling=Newtonsoft.Json.NullValueHandling.Ignore)] public int? SpeakerId;
+        [Newtonsoft.Json.JsonProperty(NullValueHandling=Newtonsoft.Json.NullValueHandling.Ignore)] public string PreviewImageUrl;
         public string PayloadSha256;
     }
 
-    public enum SaveStatus { Ready, UnsupportedVersion, Corrupt, Deleted }
+    public enum SaveStatus { Ready, UnsupportedVersion, Corrupt, Deleted, Pending }
 
     public sealed class SaveRecord
     {
@@ -49,5 +56,8 @@ namespace StudentAgeDialogueSave.Storage
         public SaveStatus Status;
         public string Error;
         public bool IsConflict;
+        public int PreviewBackgroundId,PreviewSpeakerId;
+        public string PreviewText,PreviewImageUrl;
+        public int[] PreviewOptionIds;
     }
 }

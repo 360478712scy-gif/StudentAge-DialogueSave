@@ -41,14 +41,14 @@ public static class RuntimeAdvQA
         check(probe.Frames>0 && probe.UnshieldedFrames==0,"all observed render frames suppress original dialogue graphics ("+probe.Frames+" checked)");
         check(adv.LastAttachedBeforeReady,"ADV attaches before the first dialogue becomes ready");
         yield return Shot(root,"adv-preview-first-dialogue");
-        var fold=Resources.FindObjectsOfTypeAll<AdvIcon>().Single(i=>i.gameObject.activeInHierarchy && i.Symbol==9);
-        Vector3 foldCenter=fold.rectTransform.TransformPoint(fold.rectTransform.rect.center);
+        var fold=Resources.FindObjectsOfTypeAll<AdvSkinButton>().Single(i=>i.gameObject.activeInHierarchy && i.name=="ADV.ToolbarToggle");
+        Vector3 foldCenter=fold.IconRect.TransformPoint(fold.IconRect.rect.center);
         RuntimeUiQA.Click("ADV.ToolbarToggle",check);yield return null;
-        check(adv.IsFolded && Vector3.Distance(foldCenter,fold.rectTransform.TransformPoint(fold.rectTransform.rect.center))<.01f,
+        check(adv.IsFolded && Vector3.Distance(foldCenter,fold.IconRect.TransformPoint(fold.IconRect.rect.center))<.01f,
             "fold arrow remains at the same screen center when collapsed");
         yield return Shot(root,"adv-preview-folded");
         RuntimeUiQA.Click("ADV.ToolbarToggle",check);yield return null;
-        check(!adv.IsFolded && Vector3.Distance(foldCenter,fold.rectTransform.TransformPoint(fold.rectTransform.rect.center))<.01f,
+        check(!adv.IsFolded && Vector3.Distance(foldCenter,fold.IconRect.TransformPoint(fold.IconRect.rect.center))<.01f,
             "horizontal unfold arrow returns without position drift");
         RuntimeUiQA.Click("ADV.跳过剧情",check);yield return null;
         yield return Shot(root,"adv-preview-skip-confirmation");
@@ -59,7 +59,7 @@ public static class RuntimeAdvQA
         yield return Shot(root,"adv-preview-history");
         var reader=Resources.FindObjectsOfTypeAll<AdvBacklog>().Single(p=>p.gameObject.activeInHierarchy);
         var jump=reader.GetComponentsInChildren<UnityEngine.UI.Button>().First(b=>b.name=="ADV.Rollback.0");
-        check(jump.GetComponentInChildren<TMPro.TextMeshProUGUI>().text=="" && jump.GetComponentInChildren<AdvIcon>().Symbol==13,
+        check(jump.GetComponentInChildren<TMPro.TextMeshProUGUI>()==null && jump.transform.Find("Source icon")!=null,
             "rollback is an arrow button with no text");
         check(reader.GetComponentsInChildren<UnityEngine.UI.Image>().Where(i=>i.name=="Divider").All(i=>i.rectTransform.sizeDelta.y==2 && i.color.a>=.5f),
             "dialogue row dividers have visible weight and contrast");
@@ -115,6 +115,15 @@ public static class RuntimeAdvQA
         adv.OpenPicker(false);yield return null;
         var previews=Resources.FindObjectsOfTypeAll<AdvModePreview>().Where(p=>p.gameObject.activeInHierarchy).ToArray();
         check(previews.Length==2 && previews.All(p=>p.GetComponent<UnityEngine.UI.RawImage>().texture.width==960),"chooser displays both bundled interface screenshots");
+        var chooser=GameObject.Find("Campus mode chooser");
+        check(chooser!=null && chooser.GetComponentInParent<Canvas>().transform.Find("Redrawn campus backdrop")!=null,
+            "chooser reuses campus skin backdrop");
+        check(chooser!=null && chooser.GetComponentsInChildren<AdvPaper>().Length==0,
+            "chooser cards no longer use the old beige paper skin");
+        var recommended=GameObject.Find("ADV.Recommended");
+        check(recommended!=null && recommended.transform.parent.name=="ADV.ChooseAdv" &&
+            recommended.GetComponentInChildren<TMPro.TextMeshProUGUI>().text=="推荐",
+            "recommendation badge belongs only to the ADV card");
         yield return Shot(root,"adv-preview-chooser");
         RuntimeUiQA.Click("ADV.ChooseAdv",check);yield return null;
         check(adv.IsAdv && !adv.ModalOpen,"preview card remains clickable and applies ADV mode");
@@ -246,10 +255,19 @@ public static class RuntimeAdvQA
     public static IEnumerator FirstRun(Action<bool,string> check,Func<Func<bool>,float,string,IEnumerator> until,string root)
     {
         yield return until(()=>AdvDialogueController.Active?.ModalOpen==true,30,"first launch presents UI choice");
+        check(GameObject.Find("ADV.Recommended")?.transform.parent.name=="ADV.ChooseAdv","first-run campus chooser recommends ADV");
+        check(Resources.FindObjectsOfTypeAll<AdvModePreview>().Count(p=>p.gameObject.activeInHierarchy)==2,"first-run chooser keeps both real previews");
+        check(GameObject.Find("ADV.ClosePicker")==null,"first-run choice cannot be cancelled without a preference");
         yield return Shot(root,"adv-00-first-choice");
         RuntimeUiQA.Click("ADV.ChooseOriginal",check);
-        check(AdvDialogueController.Active.Mode=="Original" && !AdvDialogueController.Active.ModalOpen,"original selection applies and closes chooser");
+        yield return until(()=>!AdvDialogueController.Active.ModalOpen,5,"first-run chooser finishes closing shutter");
+        check(AdvDialogueController.Active.Mode=="Original","original selection applies and closes chooser");
         check(File.ReadAllText(Path.Combine(root,"BepInEx/config/local.studentage.dialoguesave.cfg")).Contains("DialogueStyle = Original"),"choice persists to QA plugin config");
+        AdvDialogueController.Active.OpenPicker(false);yield return null;
+        check(GameObject.Find("ADV.ClosePicker")!=null,"later chooser includes cancel ticket");
+        RuntimeUiQA.Click("ADV.ChooseAdv",check);
+        yield return until(()=>!AdvDialogueController.Active.ModalOpen,5,"ADV chooser closes");
+        check(AdvDialogueController.Active.IsAdv && File.ReadAllText(Path.Combine(root,"BepInEx/config/local.studentage.dialoguesave.cfg")).Contains("DialogueStyle = ADV"),"ADV selection persists independently");
     }
     public static IEnumerator Run(DialogueCheckpointAdapter adapter,DialogueUiController saves,IDialogueUiService service,
         Action<bool,string> check,Func<Func<bool>,float,string,IEnumerator> until,string root)
@@ -272,13 +290,13 @@ public static class RuntimeAdvQA
         yield return new WaitForSecondsRealtime(1);
         check(talk.txtex_content.transform.parent!=originalParent,"ADV uses the actual native typing text once");
         check(talk.txtex_content.font.faceInfo.familyName=="Source Han Sans CN","ADV uses native Source Han Sans Chinese font");
-        check(talk.txtex_content.color==AdvWidgets.Ink && talk.txtex_content.fontSharedMaterial.GetFloat("_OutlineWidth")==0,
-            "normal ADV dialogue uses dark readable text without white outline");
+        check(talk.txtex_content.color.r>.9f && talk.txtex_content.fontSharedMaterial.GetFloat("_OutlineWidth")>0,
+            "normal ADV dialogue uses outlined light text on the extracted dark gradient");
         string[] saveNames={"保存","读取","快存","快读"};string[] saveWords={"SAVE","LOAD","Q.SAVE","Q.LOAD"};
         for(int i=0;i<4;i++)
         {
             var button=Resources.FindObjectsOfTypeAll<UnityEngine.UI.Button>().Single(b=>b.name=="ADV."+saveNames[i] && b.gameObject.activeInHierarchy);
-            check(button.GetComponentInChildren<TMPro.TextMeshProUGUI>().text==saveWords[i] && button.GetComponentInChildren<AdvIcon>()==null,"save toolbar uses requested English wordmarks");
+            check(button.GetComponent<AdvSkinButton>()!=null && button.GetComponentInChildren<UnityEngine.UI.RawImage>().texture!=null,"save toolbar uses extracted English wordmark artwork");
         }
         RuntimeUiQA.Click("ADV.跳过剧情",check);yield return null;
         check(adv.ModalOpen,"story skip presents confirmation");
@@ -321,10 +339,10 @@ public static class RuntimeAdvQA
         yield return Shot(root,"adv-04-choices");
         var shields=talk.group_talk.GetComponentsInParent<CanvasGroup>(true);
         check(shields.Any(g=>g.name=="ADV.NativeShield" && g.alpha==0 && !g.blocksRaycasts),"native dialogue is masked by independent shield");
-        var choice=Resources.FindObjectsOfTypeAll<AdvChoiceVeil>().First(g=>g.gameObject.activeInHierarchy);
-        check(choice.rectTransform.anchoredPosition.y<-380 && choice.rectTransform.anchoredPosition.y>-590,"choices sit lower, above the dialogue panel");
-        check(choice.raycastTarget,"faded choice retains full button hit area");
-        check(choice.GetComponent<UnityEngine.UI.Button>().colors.normalColor==AdvWidgets.Paper,"choice uses the shared warm cream palette");
+        var choice=Resources.FindObjectsOfTypeAll<AdvChoiceGraphic>().First(g=>g.gameObject.activeInHierarchy);
+        check(choice.rectTransform.anchoredPosition.y<-300 && choice.rectTransform.anchoredPosition.y>-600,"choices sit centered above the bottom controls");
+        check(choice.raycastTarget,"source choice retains full button hit area");
+        check(choice.mainTexture!=null,"choice uses cached source capsule artwork");
         yield return ReadingInput(talk,adv,check);
         if(!adv.ModalOpen)RuntimeUiQA.Click("ADV.回看",check);
         check(adv.ModalOpen && adapter.IsPausedForMenu,"history pauses the actual dialogue");
@@ -380,7 +398,7 @@ public static class RuntimeAdvQA
         yield return new WaitForSecondsRealtime(.5f);
         var cgText=(TMPro.TextMeshProUGUI)AccessTools.Method(typeof(NewTalkView),"GetTalkTxt").Invoke(talk,null);
         check(cgText.transform.parent.name=="Reading" && cgText.color.r>.9f,"CG uses its actual native text in light ink");
-        check(cgText.fontSize==32 && cgText.alignment==TMPro.TextAlignmentOptions.Top,"CG larger text is horizontally centered");
+        check(cgText.fontSize==38 && cgText.alignment==TMPro.TextAlignmentOptions.Top,"CG larger text is horizontally centered");
         File.WriteAllText(Path.Combine(root,"results/adv-font.json"),new JObject{["font"]=cgText.font.name,["family"]=cgText.font.faceInfo.familyName,
             ["cgSize"]=cgText.fontSize,["outline"]=cgText.fontSharedMaterial.GetFloat("_OutlineWidth")}.ToString());
         CheckThreeLines(cgText,check);
@@ -396,14 +414,15 @@ public static class RuntimeAdvQA
         talk.DoText("普通对白保持当前的对话框高度。\n米色的渐隐底增加通透感，仍能清楚阅读。\n这里是第三行，文字与操作图标之间需要留有间距。");
         yield return until(()=>talk.talkState==TalkState.AnimEnd,15,"three-line normal dialogue ready");
         CheckThreeLines(talk.txtex_content,check);
-        check(Resources.FindObjectsOfTypeAll<AdvPaperPlane>().Single(p=>p.gameObject.activeInHierarchy).rectTransform.anchoredPosition.x>210,
-            "outlined paper plane follows the end of the displayed sentence");
+        check(Mathf.Abs(Resources.FindObjectsOfTypeAll<AdvPaperPlane>().Single(p=>p.gameObject.activeInHierarchy).rectTransform.anchoredPosition.x-1644)<1,
+            "hollow paper plane occupies the fixed right-hand indicator position");
         yield return Shot(root,"adv-10-three-lines");
         yield return Names(talk,adapter,check,root,"adv-11-normal");
         var plane=Resources.FindObjectsOfTypeAll<AdvPaperPlane>().Single(p=>p.gameObject.activeInHierarchy);
         var firstPlane=plane.rectTransform.anchoredPosition;
+        var firstPhase=plane.AnimationTime;
         yield return new WaitForSecondsRealtime(.24f);
-        check(plane.rectTransform.anchoredPosition!=firstPlane,"sentence-end paper plane gently animates while waiting");
+        check(plane.rectTransform.anchoredPosition==firstPlane && plane.AnimationTime!=firstPhase,"paper plane animates strokes without moving its anchor");
         yield return LongHistory(talk,adv,check,root);
         var skipSetting=(BepInEx.Configuration.ConfigEntry<bool>)AccessTools.Field(typeof(AdvDialogueController),"skipConfirmation").GetValue(adv);
         bool previous=skipSetting.Value;
@@ -489,15 +508,15 @@ public static class RuntimeAdvQA
         try
         {
             var ids=new[]{Config.Cfg.PersonCfgMap.Values.First(p=>p.gender==1).id,Config.Cfg.PersonCfgMap.Values.First(p=>p.gender==2).id};
-            string[] names={"林川","夏日里的长名字"};float firstWidth=0;Color firstColor=default(Color);
+            string[] names={"林川","夏日里的长名字"};float firstWidth=0;
             var veil=Resources.FindObjectsOfTypeAll<AdvVeil>().Single(v=>v.gameObject.activeInHierarchy);Color veilColor=veil.color;
             for(int i=0;i<2;i++)
             {
                 cfg.roleIds=new List<int>{ids[i]};cfg.roleName=names[i];refresh.Invoke(talk,new object[]{cfg.roleIds,cfg.roleName});
                 yield return null;yield return new WaitForEndOfFrame();
-                var paper=Resources.FindObjectsOfTypeAll<AdvPaper>().Single(p=>p.name=="Name paper" && p.gameObject.activeInHierarchy);
-                if(i==0){firstWidth=paper.rectTransform.rect.width;firstColor=paper.color;}
-                else check(paper.rectTransform.rect.width>firstWidth && paper.color!=firstColor,"nameplate grows with name length and changes only with known gender");
+                var paper=Resources.FindObjectsOfTypeAll<TMPro.TextMeshProUGUI>().Single(p=>p.name=="Speaker" && p.gameObject.activeInHierarchy);
+                if(i==0)firstWidth=paper.rectTransform.rect.width;
+                else check(paper.rectTransform.rect.width>firstWidth,"speaker text area grows with name length");
                 check(veil.color==veilColor,"speaker gender does not change the dialogue background");
                 if(AdvDialogueController.Active.IsCgPresentation)
                     check(Mathf.Abs(paper.rectTransform.anchoredPosition.x+paper.rectTransform.rect.width/2-960)<1,"CG speaker nameplate is centered");
@@ -505,7 +524,7 @@ public static class RuntimeAdvQA
             }
             cfg.roleIds=new List<int>{-1};cfg.roleName=null;refresh.Invoke(talk,new object[]{cfg.roleIds,cfg.roleName});
             yield return null;
-            check(!Resources.FindObjectsOfTypeAll<AdvPaper>().Any(p=>p.name=="Name paper" && p.gameObject.activeInHierarchy),"narration hides the complete nameplate");
+            check(!Resources.FindObjectsOfTypeAll<TMPro.TextMeshProUGUI>().Any(p=>p.name=="Speaker" && p.gameObject.activeInHierarchy),"narration hides the speaker label");
             yield return Shot(root,prefix+"-narration");
         }
         finally{cfg.roleIds=originalIds;cfg.roleName=originalName;refresh.Invoke(talk,new object[]{originalIds,originalName});}

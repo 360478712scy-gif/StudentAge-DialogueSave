@@ -75,6 +75,7 @@ namespace StudentAgeDialogueSave.GameIntegration
         private string sessionId;
         private long visit;
         private JObject pendingRestore;
+        private readonly Dictionary<CGView,JObject> restoringCg=new Dictionary<CGView,JObject>();
         private NewTalkView pendingRestoreView;
         private int pendingRestoreGeneration;
         private TaskCompletionSource<NewTalkView> restoredView;
@@ -186,6 +187,7 @@ namespace StudentAgeDialogueSave.GameIntegration
                 Patch(typeof(CommonEvtMgr), "ShowTalk", nameof(TalkEntryPrefix), null, null,
                     new[] { typeof(int), typeof(Action), typeof(int), typeof(bool), typeof(bool), typeof(string) });
                 Patch(typeof(CommonEvtMgr), "SelectOption", nameof(OptionPrefix), null, nameof(OptionFinalizer));
+                Patch(typeof(CGView), "Refresh", nameof(CgRefreshPrefix), null, null);
                 Patch(typeof(NewTalkView), "OnOpen", nameof(OpenPrefix), null, null);
                 Patch(typeof(BaseView), "LoadComp", nameof(LoadedPrefix), null, null);
                 Patch(typeof(NewTalkView), "RefreshTalk", nameof(RefreshPrefix), null, null);
@@ -236,16 +238,19 @@ namespace StudentAgeDialogueSave.GameIntegration
             if (Get<NewTalkType>(view, "talkType") != NewTalkType.Talk || textTransitionPending ||
                 Get<bool>(view, "isDelaying") || optionDepth != 0)
                 return Refuse(out reason, "请暂停自动播放或快进并等待对话停稳");
-            if (Get<bool>(view, "isPhoneing") || Get<bool>(view, "isShowingCG") || Get<bool>(view, "isShowingComic") ||
+            if (Get<bool>(view, "isPhoneing") || Get<bool>(view, "isShowingComic") ||
                 view.paperId != 0 || view.group_foreground.gameObject.activeInHierarchy ||
                 view.group_item.gameObject.activeInHierarchy || view.group_msg.gameObject.activeInHierarchy ||
                 view.img_screen_effect.gameObject.activeInHierarchy || Get<object>(view, "curVFX") != null)
                 return Refuse(out reason, "此特殊演出或限时操作尚不支持对话存档");
             TalkCfg cfg = Get<TalkCfg>(view, "cfg");
-            if (cfg == null || (cfg.screenEffect != null && cfg.screenEffect.Count > 0))
+            bool cgActive=Get<bool>(view,"isShowingCG");
+            if(cgActive && CaptureCg(view)==null)return Refuse(out reason,"CG 画面仍在加载，请稍后保存");
+            if (cfg == null || (cfg.screenEffect != null && cfg.screenEffect.Count > 0 &&
+                !(cgActive && (cfg.screenEffect[0]==4015f || cfg.screenEffect[0]==4019f))))
                 return Refuse(out reason, "此对白的特殊演出状态尚未完成适配");
             if (view.tmpTalks == null || view.tmpTalkIdx < 0 || view.tmpTalkIdx >= view.tmpTalks.Count ||
-                (!pausedTyping && view.txtex_content.text != view.tmpTalks[view.tmpTalkIdx]))
+                (!pausedTyping && ((TMPro.TextMeshProUGUI)Call(view,"GetTalkTxt")).text != view.tmpTalks[view.tmpTalkIdx]))
                 return Refuse(out reason, "对白仍在显示过程中");
             if (Get<int>(view, "curBgId") <= 0 || !Cfg.BgCfgMap.ContainsKey(Get<int>(view, "curBgId")))
                 return Refuse(out reason, "当前背景状态尚不能完整恢复");
@@ -434,7 +439,19 @@ namespace StudentAgeDialogueSave.GameIntegration
             if(snapshot.Dialogue["historyTrail"]!=null)
             {
                 string encoded=snapshot.Dialogue.Value<string>("historyTrail");
-                var unpack=Task.Run(()=>HistoryTrailCodec.Decode(encoded));
+                var unpack=Task.Run(()=>{
+                    var decoded=HistoryTrailCodec.Decode(encoded);
+                    var history=snapshot.Dialogue["history"] as JArray;
+                    if(history==null)throw new InvalidDataException("目标存档缺少对话分支。");
+                    foreach(var point in decoded)
+                    {
+                        var prior=(JArray)point.State.Dialogue["history"];
+                        if(point.State.Brief.RunId!=snapshot.Brief.RunId || point.State.Brief.SteamId!=snapshot.Brief.SteamId ||
+                            prior.Count>history.Count || !prior.SequenceEqual(history.Take(prior.Count),JToken.EqualityComparer))
+                            throw new InvalidDataException("回看记录与目标存档的周目或对话分支不一致。");
+                    }
+                    return decoded;
+                });
                 while(!unpack.IsCompleted){cancellationToken.ThrowIfCancellationRequested();await nextFrame();AssertThread();}
                 trail=unpack.GetAwaiter().GetResult();
             }
@@ -446,17 +463,6 @@ namespace StudentAgeDialogueSave.GameIntegration
             Trace("restore.config", restoreClock.Elapsed.TotalMilliseconds); restoreClock.Restart();
             if (!CanRestore(out reason)) throw new InvalidOperationException(reason);
             Validate(snapshot.Dialogue, false);
-            if(trail!=null)
-            {
-                var history=(JArray)snapshot.Dialogue["history"];
-                foreach(var point in trail)
-                {
-                    var prior=(JArray)point.State.Dialogue["history"];
-                    if(point.State.Brief.RunId!=snapshot.Brief.RunId || point.State.Brief.SteamId!=snapshot.Brief.SteamId ||
-                        prior.Count>history.Count || !prior.SequenceEqual(history.Take(prior.Count),JToken.EqualityComparer))
-                        throw new InvalidDataException("回看记录与目标存档的周目或对话分支不一致。");
-                }
-            }
             Dictionary<string, ISaveLoadValue> incoming = DecodeWorld(snapshot.WorldBytes);
             ValidateMods(incoming, snapshot.Dialogue);
             if (snapshot.Dialogue["continuation"] is JObject continuation)
@@ -609,6 +615,9 @@ namespace StudentAgeDialogueSave.GameIntegration
                 ["visibleText"] = ((TMPro.TextMeshProUGUI)Call(view, "GetTalkTxt")).text,
                 ["lastEffectCfgId"] = Get<int>(view, "lastEffectCfgId"),
                 ["background"] = Get<int>(view, "curBgId"),
+                ["cg"] = CaptureCg(view),
+                ["speakerId"] = cfg.roleIds?.FirstOrDefault() ?? 0,
+                ["choiceSummary"] = ChoiceSummary(view),
                 ["backgroundEffect"] = CaptureBackgroundEffect(view),
                 ["countdown"] = Get<float>(view, "countdown"),
                 ["defaultOption"] = Get<CommonEvtOptionData>(view, "defaultOption")?.id ?? 0,
@@ -634,7 +643,35 @@ namespace StudentAgeDialogueSave.GameIntegration
             };
         }
 
-        private void RestorePresentation(NewTalkView view, JObject data)
+        // Store the actual CG resource and zoom, never a screenshot containing UI.
+        private static JObject CaptureCg(NewTalkView view)
+        {
+            if(!Get<bool>(view,"isShowingCG"))return null;
+            var panel=Get<CGView>(view,"cgPanel");
+            if(panel==null || !panel.isViewReady || panel.parms==null || panel.parms.Length==0 ||
+                !(panel.parms[0] is int id) || !Cfg.CGCfgMap.TryGetValue(id,out var cfg))return null;
+            bool mini=panel.parms.Length>2 && (int)panel.parms[2]==1;
+            var image=mini?panel.icon_cg_mini:panel.icon_cg;
+            if(image?.image==null || image.image.sprite==null || !image.gameObject.activeInHierarchy)return null;
+            var scale=image.transform.localScale;
+            return new JObject{["id"]=id,["mini"]=mini,["url"]=cfg.GetImgUrl(),["scale"]=new JArray(scale.x,scale.y,scale.z)};
+        }
+        private static bool CgRefreshPrefix(CGView __instance)
+        {
+            var adapter=current;
+            if(adapter==null || !adapter.restoringCg.TryGetValue(__instance,out var cg))return true;
+            adapter.restoringCg.Remove(__instance);
+            // Rebuild only the saved presentation; do not re-run the CG-unlock effect.
+            bool mini=cg.Value<bool>("mini");__instance.icon_cg.gameObject.SetActive(!mini);__instance.icon_cg_mini.gameObject.SetActive(mini);
+            var image=mini?__instance.icon_cg_mini:__instance.icon_cg;
+            image.image.DOKill();image.transform.DOKill();image.SetTextureUrl(cg.Value<string>("url"));
+            var color=image.image.color;color.a=1;image.image.color=color;
+            var values=(JArray)cg["scale"];var scale=new Vector3((float)values[0],(float)values[1],(float)values[2]);image.transform.localScale=scale;
+            if(!mini && scale.x<1.2f)image.transform.DOScale(1.2f,(1.2f-scale.x)*150f).SetEase(Ease.Linear);
+            return false;
+        }
+
+        private void RestorePresentation(NewTalkView view, JObject data,bool cgReady=false)
         {
             trackedView = view;
             DialoguePresentationPolicy.Bind(view, data.Value<int?>("presentationEvent") ?? data.Value<int>("rootEvent"));
@@ -660,6 +697,16 @@ namespace StudentAgeDialogueSave.GameIntegration
             Set(view, "roleCloths", data["roleCloths"].ToObject<Dictionary<int, int>>(DataJson));
             Set(view, "posRoles", data["posRoles"].ToObject<Dictionary<TalkAxis, List<int>>>(DataJson));
             Set(view, "talkingPos", (TalkAxis)data.Value<int>("talkingPos"));
+            if(!cgReady && data["cg"] is JObject cg)
+            {
+                int expected=generation;
+                Call(view,cg.Value<bool>("mini")?"ShowMiniCG":"ShowCG",cg.Value<int>("id"),(Action)(()=>{
+                    if(disposed || expected!=generation || !restoring)return;
+                    var panel=Get<CGView>(view,"cgPanel");restoringCg[panel]=cg;
+                    try{RestorePresentation(view,data,true);}catch(Exception error){restoringCg.Remove(panel);restoredView.TrySetException(error);}
+                }));
+                return;
+            }
             // The original OnOpen is bypassed during restore. Presentation must be
             // attached before native ForceMeshUpdate can trigger a canvas render.
             PreparingPresentation?.Invoke(view);
@@ -670,11 +717,13 @@ namespace StudentAgeDialogueSave.GameIntegration
             view.group_evt.gameObject.SetActive(false);
             view.group_item.gameObject.SetActive(false);
             view.group_msg.gameObject.SetActive(false);
-            view.group_role.gameObject.SetActive(true);
-            view.group_talk.gameObject.SetActive(true);
+            view.group_role.gameObject.SetActive(!cgReady);
+            view.group_talk.gameObject.SetActive(!cgReady);
+            if(cgReady)((GameObject)Call(view,"GetTalkGroup")).SetActive(true);
             view.img_talk.gameObject.SetActive(true);
             view.group_option.gameObject.SetActive(view.talkState == TalkState.Option);
-            view.txtex_content.text = view.talkState == TalkState.Anim ? data.Value<string>("visibleText") : view.tmpTalks[view.tmpTalkIdx];
+            var restoredText=(TMPro.TextMeshProUGUI)Call(view,"GetTalkTxt");
+            restoredText.text = view.talkState == TalkState.Anim ? data.Value<string>("visibleText") : view.tmpTalks[view.tmpTalkIdx];
             view.btn_click.interactable = true;
             var roles = Get<Dictionary<int, NewTalkRoleData>>(view, "roles");
             foreach (JObject item in (JArray)data["roles"])
@@ -711,13 +760,14 @@ namespace StudentAgeDialogueSave.GameIntegration
                     Call(view, "RefreshCountDown", remaining);
                 }
             }
-            view.root_next.gameObject.SetActive(view.talkState == TalkState.AnimEnd || view.talkState == TalkState.Countdown);
+            var restoredNext=(RectTransform)Call(view,"GetNextObj");
+            restoredNext.gameObject.SetActive(view.talkState == TalkState.AnimEnd || view.talkState == TalkState.Countdown);
             if (view.talkState == TalkState.AnimEnd || view.talkState == TalkState.Countdown)
             {
-                view.txtex_content.ForceMeshUpdate();
-                Vector2 pos = view.txtex_content.GetLastCharacterBottomRightPos();
+                restoredText.ForceMeshUpdate();
+                Vector2 pos = restoredText.GetLastCharacterBottomRightPos();
                 pos.x += 10f;
-                view.root_next.anchoredPosition = pos;
+                restoredNext.anchoredPosition = pos;
             }
             pendingRestore = null;
             restoredView.TrySetResult(view);
@@ -827,6 +877,15 @@ namespace StudentAgeDialogueSave.GameIntegration
                 : new List<CommonEvtOptionData>();
         }
 
+        internal static string ChoiceSummary(NewTalkView view)
+        {
+            if(view.talkState!=TalkState.Option)return null;
+            var labels=view.itemgroup_options.GetCells().OrderBy(c=>c.cellIdx)
+                .OfType<GenUI.Common.Cell_CommonOptionItemUI>()
+                .Select(c=>Regex.Replace(c.txtex_content.text??"","<[^>]*>","").Replace('\n',' ')).ToArray();
+            return labels.Length==0?null:"选择项："+string.Join("/",labels);
+        }
+
         private CheckpointBrief BuildBrief(NewTalkView view)
         {
             var role = Singleton<RoleMgr>.Ins.GetRole();
@@ -835,13 +894,13 @@ namespace StudentAgeDialogueSave.GameIntegration
             int id = Get<TalkCfg>(view, "cfg").id;
             string segment = view.tmpTalks != null && view.tmpTalkIdx >= 0 && view.tmpTalkIdx < view.tmpTalks.Count
                 ? view.tmpTalks[view.tmpTalkIdx] : view.talk;
-            string summary = Regex.Replace(segment ?? "", "<[^>]*>", "").Replace('\n', ' ');
+            string summary = ChoiceSummary(view) ?? Regex.Replace(segment ?? "", "<[^>]*>", "").Replace('\n', ' ');
             return new CheckpointBrief
             {
                 SteamId = new DirectoryInfo(PathDefine.SAVE_PATH).Name,
                 RunId = role.guid.ToString(),
-                Speaker = view.txt_name.text ?? "",
-                Summary = summary.Length > 120 ? summary.Substring(0, 120) + "…" : summary,
+                Speaker = ((UnityEngine.UI.Text)Call(view,"GetNameTxt")).text ?? "",
+                Summary = summary.Length > 4096 ? summary.Substring(0, 4095) + "…" : summary,
                 GameVersion = Application.version,
                 StableNodeKey = sessionId + ":" + visit + ":" + id + ":" + view.tmpTalkIdx + ":" + view.talkState,
                 RoleName = role.Name,
@@ -959,6 +1018,14 @@ namespace StudentAgeDialogueSave.GameIntegration
                 roles.Select(t => t.Value<int>("roleId")).Distinct().Count() != roles.Count ||
                 roles.Any(t => !Cfg.PersonCfgMap.ContainsKey(t.Value<int>("roleId")))) throw new InvalidDataException("立绘数据无效");
             foreach (JObject item in roles) RestoreRole(item);
+            if(data["cg"]!=null && data["cg"].Type!=JTokenType.Null)
+            {
+                if(!(data["cg"] is JObject cg) || !Cfg.CGCfgMap.TryGetValue(cg.Value<int>("id"),out var savedCg) ||
+                    savedCg.urls==null || !savedCg.urls.Contains(cg.Value<string>("url")) ||
+                    !(cg["mini"]?.Type==JTokenType.Boolean) || !(cg["scale"] is JArray scale) || scale.Count!=3 ||
+                    scale.Any(n=>float.IsNaN((float)n) || float.IsInfinity((float)n) || (float)n<.01f || (float)n>4f))
+                    throw new InvalidDataException("CG 资源或播放位置无效");
+            }
             if (!Cfg.BgCfgMap.ContainsKey(data.Value<int>("background")) || string.IsNullOrEmpty(data.Value<string>("session")))
                 throw new InvalidDataException("对话背景或会话标识缺失");
             if (!(data["history"] is JArray history) || history.Count > 10000) throw new InvalidDataException("对话历史无效");

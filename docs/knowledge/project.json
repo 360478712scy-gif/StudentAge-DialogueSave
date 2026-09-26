@@ -1,0 +1,616 @@
+{
+  "schema_version": 1,
+  "updated": "2026-09-25",
+  "scope": "仅保存当前有效事实、决策及检索入口；历史过程见STATUS，证据路径可能仅本机存在。",
+  "entries": [
+    {
+      "id": "project.entry",
+      "title": "项目入口与分层",
+      "keywords": [
+        "入口",
+        "源码",
+        "架构",
+        "项目",
+        "插件",
+        "BepInEx"
+      ],
+      "facts": [
+        "src/Plugin.cs 管生命周期，DialogueSaveService 管事务，Game/ 管原生状态，Storage/ 管持久化，UI/ 管呈现；改样式不改剧情数据。",
+        "状态/安装/验证查 STATUS 顶部，旧段仅历史。"
+      ],
+      "files": [
+        "src/Plugin.cs",
+        "src/DialogueSaveService.cs",
+        "docs/STATUS.md",
+        "docs/DEVELOPMENT.md"
+      ]
+    },
+    {
+      "id": "settings.tabs",
+      "title": "顶部标签：黑字与白色笔刷",
+      "keywords": [
+        "顶部",
+        "标签",
+        "笔刷",
+        "模糊",
+        "边框",
+        "看不清"
+      ],
+      "facts": [
+        "原作 page0 三态胶囊：idle 透明内部，hover 白底，selected 深蓝及圆润小箭头；保留上细下稍厚的边框。顶部普通黑字，selected/pressed 白字。",
+        "白笔刷仅未选中、未悬停、未按下时显示。高度43，宽 min(按钮宽-40,字数*28+66)；两边适度延长，上下不加厚，无模糊。",
+        "子图形不能覆盖原作下沿，不整图拉伸端帽或重描原边框。",
+        "五标签：游戏/图像/音频/模组配置/对话框。总跨度1176、间距32、高64不变，各宽209.6；模组配置独立第4页，确认第5页，缓存预热5页。"
+      ],
+      "files": [
+        "src/UI/AdvSettings.cs",
+        "src/UI/AdvSettingsSkin.cs",
+        "assets/adv-skin/settings-tab-brush.png",
+        "assets/adv-skin/settings-tab-brush-prompt.txt"
+      ],
+      "check": "python3 tools/run_qa.py --settings-visual"
+    },
+    {
+      "id": "settings.footer",
+      "title": "票券艺术字、等距与悬停提示",
+      "keywords": [
+        "底部",
+        "票券",
+        "艺术字",
+        "恢复默认",
+        "间距",
+        "重叠",
+        "提示框",
+        "帮助"
+      ],
+      "facts": [
+        "所有纸飞机票券按钮必须粗重略倾斜艺术字：恢复默认、取消、应用并返回、返回对话及未来新增按钮。缺字稿补素材，不能用普通字体顶替；中间选项不适用。票券左纸飞机/右缺口按高度等比，仅拉伸白色中段。",
+        "1920×1080基准：三个设置票券宽294，x=874/1208/1542，y=980，高78，间距40；提示条x80、宽770，与首票券留24。调整需同时检查碰撞、点击区和视觉边界。",
+        "共享设置说明条覆盖顶部/中间/底部及滑块，淡入淡出约0.20秒、无位移、不挡输入；悬停所有者令旧 pointerExit 不能隐藏新提示。"
+      ],
+      "files": [
+        "src/UI/AdvSettings.cs",
+        "src/UI/AdvSettingsHelp.cs",
+        "src/UI/AdvSettingsSkin.cs",
+        "src/UI/AdvBacklogSkin.cs",
+        "assets/adv-skin/ticket-lettering-prompts.md"
+      ],
+      "check": "python3 tools/run_qa.py --settings-visual"
+    },
+    {
+      "id": "settings.defaults",
+      "title": "模组默认值与应用/取消",
+      "keywords": [
+        "默认值",
+        "默认配置",
+        "水印",
+        "自动速度",
+        "文本速度",
+        "音量",
+        "应用",
+        "取消"
+      ],
+      "facts": [
+        "默认：水印显示、ADV、按钮音量80、仅已读(SkipUnread=false)、文字30字/秒、自动49。不要静默覆盖已有玩家偏好。",
+        "恢复默认先确认，只改模组草稿；取消恢复保持草稿，取消设置回滚，应用后保存；原生设置的取消语义保留。"
+      ],
+      "files": [
+        "src/UI/AdvPreferences.cs",
+        "src/UI/AdvSettings.cs",
+        "tests/RuntimeSettingsQA.cs"
+      ],
+      "check": "python3 tools/run_qa.py --settings-visual"
+    },
+    {
+      "id": "settings.controls",
+      "title": "中间卡片和选项状态",
+      "keywords": [
+        "设置",
+        "卡片",
+        "双边框",
+        "悬停",
+        "圆角",
+        "滑块",
+        "左右箭头"
+      ],
+      "facts": [
+        "中间选项原资源胶囊双边框、圆润抗锯齿；未选描边，悬停蓝色填充且文字反色；已选只变框色、正文色不变。",
+        "AdvButton/SettingsButtonInk/AdvChoiceSkin/AdvSkinButton统一pressed优先；按住移出不清pressed，只在左键up/失活清除，避免图案和文字状态分离。",
+        "顶部保留原资源形状、下沿略厚与箭头；白笔刷仅idle，pressed/hover/selected不显示；底部票券仍艺术字。",
+        "语言列表仅改显示为简体中文/繁体中文；保留zh-cn/zh-hant、选项索引、回调与持久化。",
+        "按住移出/再移入断言已加入RuntimeSettingsQA但未运行；源码和QA程序集编译通过。"
+      ],
+      "files": [
+        "src/UI/AdvSettings.cs",
+        "src/UI/AdvSettingsSkin.cs",
+        "assets/adv-skin/settings-source-controls.png",
+        "assets/adv-skin/settings-source-frame.png"
+      ],
+      "check": "python3 tools/run_qa.py --settings-visual"
+    },
+    {
+      "id": "ui.fonts",
+      "title": "中文字体与 QA 字体陷阱",
+      "keywords": [
+        "字体",
+        "苹方",
+        "PingFang",
+        "微软雅黑",
+        "汉化",
+        "日文",
+        "字库"
+      ],
+      "facts": [
+        "汉化补丁 deffontmap.tjs 实际指定微软雅黑；已解包的完整字体是日文字库，不代表补丁附带了微软雅黑。来源记录在 chinese-font-provenance.json。",
+        "正式运行一次读取系统 msyh.ttc/ttf，校验 family=Microsoft YaHei；缺失回退游戏 Source Han Sans CN。不内置苹方/微软雅黑文件。CrossOver 的私有字体句柄需定向 FontEngine 路由，不能改全局字体。",
+        "旧 QA 苹方覆盖曾掩盖真实字体。只有显式 --local-font 才允许试用；正式验收检查实际 faceInfo、中文字符和字体回退，不只看变量名。"
+      ],
+      "files": [
+        "src/UI/AdvChineseFont.cs",
+        "src/UI/AdvWidgets.cs",
+        "tests/RuntimeSkinQA.cs",
+        "tests/RuntimeSettingsQA.cs",
+        "assets/adv-skin/chinese-font-provenance.json"
+      ],
+      "check": "python3 tools/run_qa.py --settings-visual"
+    },
+    {
+      "id": "ui.dialogue",
+      "title": "对白格式、CG 原生底板与文字效果",
+      "keywords": [
+        "对白",
+        "姓名",
+        "括号",
+        "阴影",
+        "黑边",
+        "闲聊",
+        "漫画",
+        "过场",
+        "打字",
+        "CG",
+        "姓名框",
+        "分隔线",
+        "字号",
+        "变色",
+        "富文本"
+      ],
+      "facts": [
+        "普通/CG 姓名统一【姓名】；普通有说话人的台词加「」，CG 正文不添加「」。旁白不强加姓名；TMP 预处理器只变显示，保留原 text、原生打字/补全和历史。",
+        "姓名及【】统一普通字重，白字细黑边与右下黑影用 DialogueShadow；正文普通36、CG38。CG 无水印/姓名底框，姓名居中；灰白高光细线+深边+下投影，比姓名宽两个字；姓名/线/正文间各留4px。",
+        "CG 恢复黑色，沿用原生 img_mask_bottom 的逐像素alpha/UV和底边位置，不套普通 window.png。按完整文本高度：一/二/三行约为原生板高50/75/100%，打字中不跳高；只缓存一次纹理。退出CG恢复普通底板、水印及对白括号。",
+        "现有 qa/NewTalkView.cs 的 DoText/OnClickNext 使用同一个原生 TMP 和 DOText，不另造字号动画。加载剧情主要使用 size 与 color；RuntimeCgQA 覆盖大小/相对字号、红绿嵌套色、粗斜体、下划/删除线、alpha、上下标、打字/补全及CG退出；不等于全剧情验收。",
+        "漫画保留原生字幕、等图片就绪，隐藏普通UI；连续页门控已过。MiniCG原生小窗保留背景，全屏铺满，原版/ADV图像矩形一致。QA角色[-1]为旁白。"
+      ],
+      "files": [
+        "src/UI/AdvDialogueController.cs",
+        "src/UI/AdvWidgets.cs",
+        "src/Game/DialoguePresentationPolicy.cs",
+        "src/Game/ComicPresentationAdapter.cs",
+        "src/UI/AdvPaperPlane.cs",
+        "src/UI/AdvSkin.cs",
+        "tests/RuntimeCgQA.cs"
+      ],
+      "check": "python3 tools/run_qa.py --cg"
+    },
+    {
+      "id": "ui.choices",
+      "title": "剧情选项与禁用状态",
+      "keywords": [
+        "剧情选项",
+        "分支",
+        "灰色",
+        "不可选",
+        "铅笔",
+        "尺子",
+        "紫色"
+      ],
+      "facts": [
+        "原作 select 三态底图，双边框藏青底，橙色反馈改蓝；两侧为铅笔/尺子剪影。常规双选1012×80，长文可换行；保留作者富文本。",
+        "禁用真实灰色且不能点击，但原生条件悬停仍可用。动态资格变更、回调一次执行、提示层级还原均需检查。",
+        "选项出现隐藏对白和姓名，底部90px保留淡紫遮罩及工具栏；选中后恢复对白。不代替玩家选择、不重算原生条件。"
+      ],
+      "files": [
+        "src/UI/AdvChoiceSkin.cs",
+        "src/UI/AdvChoiceBinding.cs",
+        "src/UI/AdvDialogueController.cs",
+        "tests/RuntimeFeedbackQA.cs",
+        "assets/adv-skin/choice-provenance.json"
+      ],
+      "check": "python3 tools/run_qa.py --choices",
+      "evidence": "qa/choice-font-regression-20260923-210254/choice-visual-success.txt"
+    },
+    {
+      "id": "ui.conditions",
+      "title": "条件悬停：黑色单边框",
+      "keywords": [
+        "条件",
+        "提示框",
+        "黑色",
+        "单边框",
+        "锁定",
+        "DescriptionView"
+      ],
+      "facts": [
+        "独立黑色微蓝纸纹提示框、圆角、单层细边；不是选项双框，也不是设置白底说明条。条件全文、多行及作者富文本保留。",
+        "只临时装饰原生 DescriptionView：字体/材质/颜色/留白/父级离开时还原。Native颜色仅为黑底提高字形亮度，不改条件计算。",
+        "生成图看似透明不代表有 alpha；棋盘被烘入的版本已弃用。保留真RGBA或一次品红抠色，查看实际游戏截图。"
+      ],
+      "files": [
+        "src/UI/AdvChoiceTooltipSkin.cs",
+        "src/UI/AdvChoiceBinding.cs",
+        "src/UI/AdvSettingsSkin.cs",
+        "assets/adv-skin/choice-condition-provenance.json"
+      ],
+      "check": "python3 tools/run_qa.py --choices"
+    },
+    {
+      "id": "ui.confirmations",
+      "title": "是/否确认框与不再确认",
+      "keywords": [
+        "确认",
+        "弹窗",
+        "提示框",
+        "是",
+        "否",
+        "下次不再确认",
+        "蓝色"
+      ],
+      "facts": [
+        "设置新增对话框页：3列ON/OFF卡片，顶部全部ON/OFF，14个实际操作组；ON=询问，OFF=直接执行，与弹窗不再提示共用真实配置。草稿应用才生效，取消不写；只提交改过的键，保留期间弹窗产生的新记忆。",
+        "ConfirmationOptions统一保存/覆盖/快存/读取/快读/原版读/标题/回溯/跳过/默认/复制/交换/删除及其他原生操作；沿用Interface旧跳过/回溯键。快存新接确认并保持请求去重、取消释放。",
+        "其他原生提示保留文案+回调身份独立键；全部ON/其他ON用代次恢复已记忆及尚未绑定旧键，重启也生效。原版框沿用样式追加勾选，共用语义键；ADV仍校园蓝头+白底。",
+        "弹窗和页脚提示按实际字体宽度均衡换行，控制行宽、不留孤字、不拆Unicode组合字符；取消不记忆，确认勾选才关闭。队列/暂停/关闭百叶窗、pressed优先与源音效继续保留。",
+        "最终水平百叶/备注光标多行选区/确认队列/卸载通过，见QA_FINAL_20260924；确认和回溯延迟回调均在卸载时撤销。真实输入法组合输入未测。"
+      ],
+      "files": [
+        "src/UI/ConfirmationOptions.cs",
+        "src/UI/ConfirmationText.cs",
+        "src/UI/AdvConfirmation.cs",
+        "src/UI/AdvSettings.cs",
+        "src/UI/AdvSettingsHelp.cs",
+        "tests/ConfirmationCheck/Program.cs",
+        "docs/PENDING_TESTS.md"
+      ],
+      "check": "dotnet run --project tests/ConfirmationCheck/ConfirmationCheck.csproj -p:GameDir=<游戏目录>；合批：--settings-visual"
+    },
+    {
+      "id": "ui.audio",
+      "title": "原作悬停和点击音效",
+      "keywords": [
+        "音效",
+        "声音",
+        "hover",
+        "click",
+        "重复",
+        "音量"
+      ],
+      "facts": [
+        "hover=カーソル１(entry00555)，click=決定１(00560)，toggle=切替１(00558)，原包哈希和PCM来源在 source-ui-audio.json。",
+        "AdvButton统一hover/click，经游戏原生UI mixer与按钮音量播放；业务监听不再重复PlayClick。禁用按钮不提交或重复响铃；按钮音量滑块保留试听。"
+      ],
+      "files": [
+        "src/UI/AdvWidgets.cs",
+        "src/UI/AdvSkin.cs",
+        "src/UI/AdvSettings.cs",
+        "assets/adv-skin/source-ui-audio.json"
+      ],
+      "check": "python3 tools/run_qa.py --settings-visual"
+    },
+    {
+      "id": "ui.backlog",
+      "title": "日志透明度、DATE 与返回票券",
+      "keywords": [
+        "backlog",
+        "日志",
+        "黑底",
+        "透明",
+        "DATE",
+        "季节",
+        "回看",
+        "返回对话"
+      ],
+      "facts": [
+        "大Back Log标题；中间装饰alpha0，蒙版(8,39,72) alpha230/255；不得改不透明黑色。保留原版约1660宽、200高行，日期取RoundCfg.year+SeasonCfg.name。",
+        "只实例化可见行；同一历史Revision及原生日志末条/数量不变时复用整个关闭后的阅读界面、滚动位置与肖像，不使用TTL；历史更新/回溯/清空后下次重建。",
+        "素材逐帧预热；肖像96×96轮廓采样优先异步GPU回读并缓存，无支持/失败回退；百叶窗期间不开始新采样，避免转场帧同步等待。",
+        "历史人物/衣服/表情、完整检查点回溯资格不变；底部仅艺术字返回对话。打开与退出都共享设置百叶窗，输入屏蔽到结束。",
+        "settings-backlog-cg-pass已过透明度/日期/肖像/虚拟行/滚动/缓存复用/进出动画与真实回溯，预热素材准备37.5ms；lifecycle-pass已过缓存卸载恢复。"
+      ],
+      "files": [
+        "src/UI/AdvBacklog.cs",
+        "src/UI/AdvBacklogSkin.cs",
+        "src/Game/DialogueHistory.cs",
+        "tests/RuntimeBacklogQA.cs",
+        "assets/adv-skin/backlog-provenance.json"
+      ],
+      "check": "python3 tools/run_qa.py --backlog"
+    },
+    {
+      "id": "ui.transitions",
+      "title": "百叶窗、输入解锁与性能",
+      "keywords": [
+        "百叶窗",
+        "动画",
+        "切屏",
+        "卡顿",
+        "性能",
+        "蓝条",
+        "转场"
+      ],
+      "facts": [
+        "设置/日志/存档整页沿用0.30秒斜百叶；设置分页32px水平条仅覆盖内容+提示。确认、跳过/回溯确认、备注编辑弹窗开关都改整屏水平百叶，背景原位；参考录屏2.48–2.68秒。",
+        "截图为GPU RenderTexture，转场一次捕获，完成/销毁释放；输入遮罩及ModalOpen持续到实际动画结束，首帧渲染后启动动画时钟。",
+        "AdvSettingsTransition.Exit共用退出；原生SaveView/暂停EntryView关闭仅在本插件已装饰且ADV时触发，OnDestroy重复通知不重复播放。",
+        "素材/页面缓存分帧预热，日志复用；动画内禁止逐帧读盘、编码截图或扫描配置。",
+        "新增弹窗键鼠/观感待后续合批；编译及旧耗时不代表本版流畅验收。"
+      ],
+      "files": [
+        "src/UI/AdvSettingsTransition.cs",
+        "src/UI/AdvSettings.cs",
+        "src/UI/AdvBacklog.cs",
+        "tests/RuntimeSettingsQA.cs"
+      ],
+      "check": "python3 tools/run_qa.py --settings-visual"
+    },
+    {
+      "id": "ui.original",
+      "title": "原版入口、键帽与操作栏",
+      "keywords": [
+        "原版",
+        "保存入口",
+        "九宫格",
+        "键帽",
+        "Esc",
+        "快捷键"
+      ],
+      "facts": [
+        "仅Original模式：对话存档一级入口及其二级三类，原生手动/自动/快速与九宫格保留；ADV新页查ui.archive。Esc仅保存/加载两项，保留原五项布局。",
+        "原版新增四保存项向左展开，不挪原生日志/自动/菜单。快捷键S/L/H/J先查原生冲突；键帽参照common6 F/S，#734D31粗无衬线；中文克隆当前可见日志标签完整材质，不从隐藏池取。",
+        "ADV工具栏顺序SAVE/LOAD/Q.SAVE/Q.LOAD/日志/自动/快进/跳过/隐藏/设置；当前折叠控件用源hold锁状态，按当前代码/截图，旧箭头要求已被后续修改覆盖。首选页复用校园蓝背景/圆角卡片，ADV旁标推荐，两张真实预览及整卡选择持久化保留；已随前批安装并隔离验证。",
+        "原版设置不再加底部对话界面按钮；快进速度下克隆原生行，左右箭头选原版/ADV，端点隐藏箭头，确认提交/取消撤销。首启仍用校园蓝双预览。查NativeModeSetting；隔离两箭头、端点、取消重开、确认切换已过；首启双预览/推荐及模式持久化已过。 ADV存档入口仅关闭SaveView首次资源加载转圈，保留实际读写加载；Original恢复原值。"
+      ],
+      "files": [
+        "src/UI/DialogueUiController.cs",
+        "src/UI/DialogueEscapeMenu.cs",
+        "src/UI/DialogueSavePage.cs",
+        "src/UI/DialogueHotkeyBindings.cs",
+        "src/UI/AdvModePreview.cs",
+        "src/UI/AdvDialogueController.cs",
+        "src/UI/NativeModeSetting.cs"
+      ],
+      "check": "python3 tools/run_qa.py --controls"
+    },
+    {
+      "id": "storage.restore",
+      "title": "完整恢复、兼容与历史",
+      "keywords": [
+        "存档",
+        "回溯",
+        "恢复",
+        "continuation",
+        "版本",
+        "不兼容",
+        "快照"
+      ],
+      "facts": [
+        "恢复完整世界/效果阶段/随机/实际选项/continuation；检查目标必要节点，不因二进制或版本差异直接拒读。全局指纹/DLL哈希不进正常保存热路径。",
+        "旧日志缺完整快照不能补造；新档内嵌当前已有历史，捕获时固定分支，后台压缩独立数据。相同对白阶段去重但选项独立记录，不能以丢效果换性能。",
+        "当前源码HistoryTrail v2分块压缩/XOR世界差量，弱引用缓存只用于已封存不可变检查点，前驱变化必须重编码；兼容v1，完整性/分支预检不省略，纯数据预检移后台。回溯运行及卸载已合批通过。",
+        "CG快照追加可选cg{id,mini,url,scale}及PreviewImageUrl，恢复CG子视图/原文字/缩放进度，禁止重放解锁效果；旧档空字段省略兼容。漫画/电话等仍独立适配，不借放开CG绕过其门禁。"
+      ],
+      "files": [
+        "src/Game/DialogueCheckpointAdapter.cs",
+        "src/Game/DialogueContinuation.cs",
+        "src/Game/DialogueHistory.cs",
+        "src/Game/HistoryTrailCodec.cs",
+        "tests/RuntimeSemanticQA.cs"
+      ],
+      "check": "python3 tools/check.py；涉及运行恢复时按 docs/DEVELOPMENT.md 选语义/兼容检查"
+    },
+    {
+      "id": "storage.recovery",
+      "title": "原子存储、保留副本与退出",
+      "keywords": [
+        "原子",
+        "删除",
+        "备份",
+        "Retained",
+        "冲突",
+        "云同步",
+        "退出",
+        "自动存档"
+      ],
+      "facts": [
+        "Repository负责校验/原子发布/父版本冲突/删除标记；Service负责排队与提交回执，UI销毁不能漏事务。删除遇扫描排队且仅删除指定版本。",
+        "DialogueSaveLocal/<SteamId>/Backups/Retained保存独立副本：仅补缺失，不覆盖现有、不复活墓碑；历史版本数不等于可见槽数。退出有限等待自动保存，不拦退出。",
+        "正式数据和其他模组只读；存储修复需要相关独立检查及隔离功能证据。云同步未做两设备验收不能称可用。",
+        "扫描缓存只复用已验证元数据，每次仍读当前完整字节并SHA256；禁止mtime/大小/TTL当冲突有效性。局部备份目录枚举按一次扫描合并，提交/副本仍原子且校验磁盘字节。"
+      ],
+      "files": [
+        "src/Storage/Repository.cs",
+        "src/Storage/SaveCodec.cs",
+        "src/DialogueSaveService.cs",
+        "src/Game/DialogueExitSave.cs",
+        "tests/RuntimeRecoveryQA.cs"
+      ],
+      "check": "python3 tools/check.py；隔离：python3 tools/run_qa.py --recovery"
+    },
+    {
+      "id": "assets.source",
+      "title": "素材库、生成图与导入经验",
+      "keywords": [
+        "素材",
+        "资源",
+        "解包",
+        "PNG",
+        "alpha",
+        "锯齿",
+        "抠图",
+        "imagegen"
+      ],
+      "facts": [
+        "本机参考库 /Users/yugonglian/Projects/limelight-ui-extraction：sprites/独立资源、layouts/named/布局、original/unencrypted/汉化映射、work/extracted/原包音效。不要全文扫库，先按组件名定位。",
+        "项目最终素材在 assets/adv-skin，provenance和prompt记录来源。图像生成后落入项目，不只引用临时目录；色键/深色字形mask一次导入缓存，真实alpha优先，静态图不代表游戏验收。",
+        "圆角/上下沿不能整图拉扁：九切端帽和独立notch；美术文字用coverage mask统一状态染色，避免白色残边或字不随hover变化。"
+      ],
+      "files": [
+        "assets/adv-skin/README.md",
+        "src/UI/AdvSkin.cs",
+        "src/UI/AdvSettingsSkin.cs",
+        "assets/adv-skin/settings-provenance.json"
+      ]
+    },
+    {
+      "id": "qa.route",
+      "title": "按改动选择最小验证",
+      "keywords": [
+        "测试",
+        "QA",
+        "隔离",
+        "验证",
+        "构建",
+        "命令"
+      ],
+      "facts": [
+        "文档/知识库只运行 knowledge.py --check、检索冒烟和diff检查，不启动游戏。代码独立检查tools/check.py；实际游戏相关构建tools/build.py。",
+        "运行前build→prepare_qa，核对隔离证明；仅用隔离fixture。设置 --settings-visual，条件 --choices，日志 --backlog，呈现 --presentation-visual，持久化 --recovery，兼容/退出 --adv-only --hotfix。",
+        "看专用success标记、failed.txt、checks和截图；显式 --local-font 才可用QA苹方。合成旁白不能替代说话人fixture；切页后至少等布局帧再做真实EventSystem点击。",
+        "用户2026-09-24要求减少测试耗时：高风险做最小即时检查，低风险交互/动画/画面记docs/PENDING_TESTS.md，合并后续五项任务统一测；无修改不重跑。压缩后先读AGENTS当前接续，不自动恢复整套QA。",
+        "思思UP专项见docs/QA_SISI_UP_20260924.md和tests/RuntimeSisiQA.cs：作者葬礼/独处事件用原生ShowEvent，仅测试存档跳过养成前置；UP需额外隔离配置与资源目录，结束恢复普通两插件QA。"
+      ],
+      "files": [
+        "tools/check.py",
+        "tools/build.py",
+        "tools/prepare_qa.py",
+        "tools/run_qa.py",
+        "docs/DEVELOPMENT.md",
+        "docs/PENDING_TESTS.md",
+        "docs/QA_SISI_UP_20260924.md"
+      ]
+    },
+    {
+      "id": "release.local",
+      "title": "本机安装、旧版本与发布边界",
+      "keywords": [
+        "安装",
+        "旧版本",
+        "没加载",
+        "DLL",
+        "工坊",
+        "发布",
+        "替换",
+        "路径"
+      ],
+      "facts": [
+        "生产DLL：dist/StudentAgeDialogueSave/BepInEx/plugins/StudentAgeDialogueSave/StudentAgeDialogueSave.dll；本机Steam bottle工坊1991040/3804899191/plugins/StudentAgeDialogueSave.dll。不要装qa/runtime里的重写DLL。",
+        "没加载/旧版：查实际启动路径、LogOutput.log、plugins、enabled_mods.txt/启用状态，核对构建与安装hash，游戏重启后才加载；不能凭猜测删除BepInEx。",
+        "本机安装授权后：游戏退出→备份qa/local-install-backups→原子替换→校验hash→记录收据；打包不自动上传。观察于2026-09-23：最近本机替换未上传，正式游戏未重开验收；当前状态必须重新核对。"
+      ],
+      "files": [
+        "tools/build.py",
+        "tools/package_workshop.py",
+        "docs/STATUS.md",
+        "docs/WORKSHOP.md"
+      ],
+      "evidence": "qa/settings-confirmation-final-20260923-211426/install-receipt.json"
+    },
+    {
+      "id": "performance.batch",
+      "title": "当前代码性能批次与合批验收",
+      "keywords": [
+        "当前",
+        "接续",
+        "压缩",
+        "待测",
+        "性能",
+        "卡顿",
+        "漫画",
+        "拳击",
+        "原版设置",
+        "测试时间"
+      ],
+      "facts": [
+        "最终合批及本机安装见docs/QA_FINAL_20260924.md与qa/final-batch-20260924/install-receipt.json；旧性能见QA_PERF_20260924，未正式启动/发布。",
+        "漫画首图URL/代次等待加载及淡入后恢复字幕，连续翻页/重开/旧回调隔离通过；拳击补btn_skip原生OnHotKeyInput(122)，资格/结算不变。",
+        "最终独立104存储/26配置/16历史/11确认/121契约通过；五设置页、CG/原版档/弹窗卸载有隔离证据。输入法/听感/长周目/Windows原生/跨设备待测。",
+        "2000条文本日志首开同步286→69ms；16次往返新建行81→6，排除头两次访问滚动中位3.20→0.56ms。复用外壳、最多24条屏外渲染缓存，不删历史/快照；非FPS/动画总时长/长周目存储基准。",
+        "返回对话/恢复默认字稿每批16384像素预热，临时纹理独占/释放，逐像素等于原导入。去掉姓名/选项逐帧字符串；日志回溯/CG富文本/选项资格刷新及原生一次回调通过。"
+      ],
+      "files": [
+        "docs/QA_FINAL_20260924.md",
+        "docs/QA_PERF_20260924.md",
+        "src/UI/AdvBacklog.cs",
+        "src/UI/AdvDialogueController.cs",
+        "src/UI/AdvSettingsSkin.cs",
+        "src/Game/ComicPresentationAdapter.cs",
+        "src/Game/NativeFightInputFix.cs",
+        "tests/RuntimePerfSweepQA.cs"
+      ],
+      "evidence": "qa/final-batch-20260924/"
+    },
+    {
+      "id": "ui.toolbar",
+      "title": "工具栏白锁、解锁与自动滑入滑出",
+      "keywords": [
+        "工具栏",
+        "锁",
+        "自动隐藏",
+        "白色",
+        "滑出",
+        "hold",
+        "quickload"
+      ],
+      "facts": [
+        "默认closed白锁固定；folded字段现表示解锁自动隐藏模式，不再SetActive隐藏工具栏。hold_normal_on为闭锁白图，排除通用_on蓝色着色。",
+        "点击解锁先保持展开；鼠标离开工具栏区域向下64px滑出，回到屏幕底部对应区域滑回；再次点击开锁图固定。T同义切换。",
+        "锁与动作同属Toolbar，边缘感应按画布坐标；按住鼠标暂停收起。已去掉按钮上方黑色悬停文字，音效/状态保留。",
+        "仅hover/pressed临时变色，解锁/锁定不持续蓝色；普通/CG/选项沿用同一逻辑，漫画隐藏要求保持。",
+        "隔离快存轮换12槽、快读排队/取消重试/实际恢复、按住移出颜色稳定和锁定切换已过；真实鼠标底边滑动、多分辨率及离焦观感仍需正式游玩。"
+      ],
+      "files": [
+        "src/UI/AdvDialogueController.cs",
+        "src/UI/AdvSkin.cs",
+        "src/UI/AdvWidgets.cs",
+        "docs/PENDING_TESTS.md"
+      ]
+    },
+    {
+      "id": "ui.archive",
+      "title": "12槽存档页、四种配色与编辑事务",
+      "keywords": [
+        "存档界面",
+        "12槽",
+        "保存粉色",
+        "读取蓝色",
+        "快读绿色",
+        "原版黄色",
+        "复制",
+        "交换",
+        "备注",
+        "删除",
+        "缩略图",
+        "Q版"
+      ],
+      "facts": [
+        "12槽4×3，蓝读/粉存/绿快读/黄原版；滚轮整页防抖.16秒。原图外框阴影已合背景，按参考拟合下2/柔边12/边缘alpha .08；440票券分段伸缩/文字右8已看1920及1280截图。",
+        "保存页空槽保存、非空覆盖；读取/快读页只读取，空槽不写。跨周目覆盖原子提交；覆盖确认可记忆。四编辑互斥，KeepEditing默认开。原版自动档独立筛选；原版界面按钮绕过ADV。标题保存禁用；同类点击不转场。加减共用页数，仅减空末页。",
+        "对话档复制/备注发布不可变版本；交换两份完整body加单个commit回执才可见；缺失/损坏任一成员仍显示旧head。空移带祖先删除闭包；删除交换成员保留事务body供另一成员验证，分支/过期选择拒绝。",
+        "原版排列/备注在dialogue_native_layout.json；NativeSlotEdits后台真实指纹/原子索引/独立备份，复制完整字节。物理新编号避开隐藏名单，关闭重开后也不复用已删名称；两设备索引合并未验收。",
+        "提示仅左下框。原版4并发读头，默认玩家名+地点+年季、季节色/地点背景，手写备注优先、主角Q版；ADV保留对白/实际选项/备注，人物Q头像→本人完整Q→主角。CG按保存图像预览；备注显式深色光标并在开窗后聚焦。"
+      ],
+      "files": [
+        "src/UI/AdvSavePage.cs",
+        "src/UI/AdvArchiveSkin.cs",
+        "src/UI/ArchivePreview.cs",
+        "src/UI/NativeArchiveBrowser.cs",
+        "src/DialogueArchiveService.cs",
+        "src/Storage/RepositoryEdits.cs",
+        "src/Storage/NativeSlotEdits.cs",
+        "docs/PENDING_TESTS.md",
+        "docs/QA_ARCHIVE_CONTROLS_20260924.md"
+      ],
+      "check": "dotnet run --project tests/StorageTests.csproj -- --archive-edits；最终游戏验证按PENDING_TESTS，新ADV不能套旧九格验收脚本。",
+      "evidence": "qa/final-batch-20260924/"
+    }
+  ]
+}

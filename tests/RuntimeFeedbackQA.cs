@@ -44,6 +44,27 @@ public static class RuntimeFeedbackQA
         check(colors.Length>0&&colors.All(c=>c.r==255&&c.g==120&&c.b==203),"rendered option glyphs retain author color #ff78cb");
         check(pink.textInfo.lineCount==1&&!pink.isTextOverflowing,"formatted caption fits without tag-induced overflow");
         var locked=Button("ADV.Choice.1");
+        bool choiceVisual=File.Exists(Path.Combine(root,"choice-visual.txt"));
+        if(choiceVisual)
+        {
+            var frame=locked.transform.parent.parent;
+            check(!frame.Find("Reading").gameObject.activeSelf,"choices hide dialogue text, name and full dialogue panel");
+            check(frame.Find("Choice lower lavender").gameObject.activeSelf&&frame.Find("Toolbar").gameObject.activeSelf,"choices retain toolbar with a shallow lavender veil");
+            check(locked.GetComponent<RectTransform>().sizeDelta==new Vector2(1012,80),"choice bar is reduced from source 1264x100 without changing cap proportions");
+            check(locked.transform.Find("Pencil silhouette")!=null&&locked.transform.Find("Ruler silhouette")!=null,"both stationery silhouettes are installed");
+            check(locked.GetComponent<AdvChoiceGraphic>().mainTexture.name.Contains("disabled"),"disabled choice uses gray artwork");
+            yield return ChoiceShot(root,"choice-normal-and-disabled");
+            var active=Button("ADV.Choice.0").GetComponent<AdvChoiceSkin>();
+            active.OnPointerEnter(new UnityEngine.EventSystems.PointerEventData(UnityEngine.EventSystems.EventSystem.current));
+            check(active.GetComponent<AdvChoiceGraphic>().mainTexture.name.Contains("hover"),"hover selects blue source inner rim");
+            yield return ChoiceShot(root,"choice-blue-hover");
+            active.OnPointerDown(new UnityEngine.EventSystems.PointerEventData(UnityEngine.EventSystems.EventSystem.current));
+            check(active.GetComponent<AdvChoiceGraphic>().mainTexture.name.Contains("pressed"),"press selects blue pressed source artwork");
+            yield return ChoiceShot(root,"choice-blue-pressed");
+            active.OnPointerUp(new UnityEngine.EventSystems.PointerEventData(UnityEngine.EventSystems.EventSystem.current));active.OnPointerExit(new UnityEngine.EventSystems.PointerEventData(UnityEngine.EventSystems.EventSystem.current));
+            adv.ToggleHidden();check(!locked.gameObject.activeInHierarchy,"hide removes choices and their bottom veil");
+            adv.ToggleHidden();check(!frame.Find("Reading").gameObject.activeSelf&&locked.gameObject.activeInHierarchy,"restoring choices does not bring back the dialogue panel");
+        }
         var native=(GenUI.Common.Cell_CommonOptionItemUI)Talk.itemgroup_options.GetCells()[1];
         check(!native.btn_click.interactable&&!locked.interactable,"unmet native attribute condition disables ADV option");
         check(!plain.overrideColorTags&&plain.color==pink.color,"disabled choice preserves original caption color");
@@ -63,6 +84,10 @@ public static class RuntimeFeedbackQA
         var tooltip=(View.Common.DescriptionView)UIMgr.GetView<View.Common.DescriptionView>();
         check((bool)AccessTools.Field(typeof(View.Common.DescriptionView),"isResizeFinish").GetValue(tooltip),"native hover tooltip finished layout before screenshot");
         tooltip.SetPos(new Vector2(250,80));
+        check(tooltip.group_vertical.Find("ADV.ChoiceCondition.DarkPaper")!=null,"condition tooltip uses dedicated dark artwork");
+        check(tooltip.txtex_vertical_title.text==expected.Value.title&&!tooltip.txtex_vertical_title.overrideColorTags,"campus tooltip preserves exact native rich condition text");
+        check(locked.GetComponent<AdvChoiceGraphic>().mainTexture.name.Contains("disabled"),"hovering conditions preserves gray choice artwork");
+        File.WriteAllLines(Path.Combine(root,"results/condition-tooltip-layout.txt"),tooltip.showingXform.GetComponentsInChildren<Graphic>(true).Select(g=>g.name+" enabled="+g.enabled+" active="+g.gameObject.activeInHierarchy+" rect="+g.rectTransform.rect+" material="+g.material.name));
         check(tooltip.gameObject.GetComponentInParent<Canvas>().renderMode==RenderMode.ScreenSpaceOverlay&&tooltip.gameObject.GetComponentInParent<Canvas>().sortingOrder>locked.GetComponentInParent<Canvas>().sortingOrder,"condition tooltip renders above all ADV choices");
         File.WriteAllLines(Path.Combine(root,"results/feedback-tooltip-canvas.txt"),tooltip.gameObject.GetComponentsInParent<Canvas>(true).Select(c=>c.name+" "+c.sortingOrder+" "+c.overrideSorting+" "+c.renderMode));
         yield return new WaitForEndOfFrame();ScreenCapture.CaptureScreenshot(Path.Combine(root,"results/feedback-rich-options.png"));yield return null;
@@ -70,12 +95,18 @@ public static class RuntimeFeedbackQA
         yield return until(()=>!UIMgr.IsViewOpened<View.Common.DescriptionView>(),10,"condition tooltip closes on pointer exit");
         yield return null;yield return null;
         check(tooltip.gameObject.GetComponentInParent<Canvas>().renderMode==RenderMode.ScreenSpaceCamera,"native tooltip parent is restored after hover ends");
+        check(tooltip.group_vertical.Find("ADV.ChoiceCondition.DarkPaper")==null&&tooltip.txtex_vertical_title.margin.x<12,"shared tooltip artwork and text padding restored on exit");
         check(locked.colors.disabledColor!=locked.colors.normalColor,"disabled box stays gray after pointer exit");
         var unlocked=Button("ADV.Choice.0");
         var unlockedDesc=unlocked.GetComponent<Components.Description>();
         check(unlocked.interactable&&unlockedDesc.getDescription(0).HasValue,"available option also exposes fulfilled condition");
         UnityEngine.EventSystems.ExecuteEvents.Execute(unlocked.gameObject,new UnityEngine.EventSystems.PointerEventData(UnityEngine.EventSystems.EventSystem.current),UnityEngine.EventSystems.ExecuteEvents.pointerEnterHandler);
         yield return until(()=>UIMgr.IsViewOpened<View.Common.DescriptionView>(),10,"available option fulfilled condition appears on hover");
+        yield return new WaitForSecondsRealtime(.6f);
+        tooltip.SetPos(new Vector2(250,80));
+        check(tooltip.group_short.Find("ADV.ChoiceCondition.DarkPaper")!=null,"one-line fulfilled condition uses the same dark artwork");
+        check(tooltip.txtex_short_title.text==unlockedDesc.getDescription(0).Value.title&&!tooltip.txtex_short_title.isTextOverflowing,"one-line condition remains complete after tooltip padding");
+        yield return new WaitForEndOfFrame();ScreenCapture.CaptureScreenshot(Path.Combine(root,"results/condition-available.png"));yield return null;
         UnityEngine.EventSystems.ExecuteEvents.Execute(unlocked.gameObject,new UnityEngine.EventSystems.PointerEventData(UnityEngine.EventSystems.EventSystem.current),UnityEngine.EventSystems.ExecuteEvents.pointerExitHandler);
         yield return until(()=>!UIMgr.IsViewOpened<View.Common.DescriptionView>(),10,"available option condition hides on exit");
         // Native refresh can change eligibility without changing the cell or option id.
@@ -87,6 +118,14 @@ public static class RuntimeFeedbackQA
         check(!locked.interactable,"same native cell becoming unavailable remains blocked");
         Button("ADV.Choice.0").onClick.Invoke();
         yield return until(()=>Id==1900000003&&adapter.CanCapture(out _),20,"colored option still invokes the native branch once");
+        if(choiceVisual)
+        {
+            yield return null;yield return null;
+            var frame=Resources.FindObjectsOfTypeAll<Canvas>().Single(c=>c.name=="DialogueSave.ADV").transform.Find("Frame");
+            check(frame.Find("Reading").gameObject.activeSelf&&!frame.Find("Choice lower lavender").gameObject.activeSelf,"choosing restores dialogue and removes choice-only lavender veil");
+            yield return ChoiceShot(root,"choice-return-to-dialogue");
+            File.WriteAllText(Path.Combine(root,"results/choice-visual-success.txt"),"CHOICE_SOURCE_SKIN_NATIVE_CALLBACK_TOOLTIP_VISIBILITY_OK");yield break;
+        }
         var restore=adapter.RestoreAsync(baseline);yield return until(()=>restore.IsCompleted,30,"return to playback fixture");restore.GetAwaiter().GetResult();
         yield return until(()=>adapter.CanAdvancePresentation(Talk),15,"playback fixture accepts input");
         foreach(var mode in new[]{new {Auto=true,Scale=1f},new {Auto=false,Scale=4f},new {Auto=true,Scale=4f}})
@@ -123,4 +162,6 @@ public static class RuntimeFeedbackQA
         yield return RuntimeHistoryRollbackQA.Run(adapter,check,until,root);
         File.WriteAllText(Path.Combine(root,"results/feedback-fixes.txt"),"Rich choice rendering, native selection, auto/fast history return, cancel/close behavior and state-effect rollback passed.");
     }
+    static IEnumerator ChoiceShot(string root,string name)
+    {yield return new WaitForEndOfFrame();ScreenCapture.CaptureScreenshot(Path.Combine(root,"results/"+name+".png"));yield return null;}
 }

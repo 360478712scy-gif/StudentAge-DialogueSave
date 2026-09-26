@@ -1,0 +1,62 @@
+{
+  "generated_with": "built-in image_gen",
+  "generated": {
+    "archive-background.png": {
+      "prompt": "Create a production widescreen 1920x1080 campus visual-novel save/load BACKGROUND with NO words, NO UI panels, NO controls and NO characters. White and pale cyan watercolour paper with school windows and stationery confined to narrow edges, navy painted footer below y920, blank pale center x80..1840 y140..950, neutral header y0..135 with tiny school ink/halftone marks. Spacious clean interface stage matching the Student Age setting art. No musical instruments. Neutral palette suitable for blue, pink, green, yellow tint overlays.",
+      "role": "background"
+    },
+    "archive-lettering.png": {
+      "prompt": "Create a typography atlas, 1600x1000, pure white background, six equal isolated horizontal bands. Exact labels in order: Data Save; Data Load; Quick Load; Native Save; 返回标题画面; 返回游戏画面. Each label centered alone in its band. Very heavy dark navy, chunky slightly italic hand-painted brush lettering, playful Japanese visual novel UI title and ticket button aesthetic. Accurate Chinese characters. No icons, borders, extra text, gradients or decorations. Generous separation between rows for runtime cropping.",
+      "role": "six-band lettering atlas"
+    },
+    "archive-information-tag.png": {
+      "generated_with": "built-in image_gen",
+      "source_output": "exec-b3e26361-23ab-40ef-bd8f-fbed23df3ca5.png",
+      "prompt": "Single blank dark desaturated navy-blue matte printed UI badge, subtle pale-blue scratches, thin soft-white border, restrained shadow, rounded corners, transparent alpha, no text or icons. Original-game DATE/TIME badge proportions; campus watercolor style.",
+      "runtime": "Crop alpha bounds; overlay theme-colored TIME/DATE/COMMENT. Remove old embedded tags first to avoid doubled edges."
+    }
+  },
+  "reused": {
+    "archive-item_on.png": "/Users/yugonglian/Projects/limelight-ui-extraction/sprites/uipsd/file/item_on.png",
+    "archive-item_off.png": "/Users/yugonglian/Projects/limelight-ui-extraction/sprites/uipsd/file/item_off.png",
+    "archive-detail_over__null_.png": "/Users/yugonglian/Projects/limelight-ui-extraction/sprites/uipsd/file/detail_over__null_.png",
+    "archive-item_over.png": "/Users/yugonglian/Projects/limelight-ui-extraction/sprites/uipsd/file/item_over.png",
+    "archive-detail_base__null_.png": "/Users/yugonglian/Projects/limelight-ui-extraction/sprites/uipsd/file/detail_base__null_.png",
+    "archive-source-background.png": "/Users/yugonglian/Projects/limelight-ui-extraction/png/uipsd/file__bg0.png",
+    "archive-source-controls.png": "/Users/yugonglian/Projects/limelight-ui-extraction/png/uipsd/file__pack.png"
+  },
+  "cursor": {
+    "file": "archive-cursor-atlas.png",
+    "source": "/Users/yugonglian/Projects/limelight-ui-extraction/png/uipsd/qlpopup__pack.png",
+    "crop_top_origin": [
+      276,
+      504,
+      272,
+      248
+    ]
+  },
+  "layout_source": "/Users/yugonglian/Projects/limelight-ui-extraction/layouts/named/uipsd/file.json",
+  "runtime": "Restore cr=1 packing rotation; green source pixels mapped to requested palette; preserve source card border/cutout geometry; generated labels become alpha coverage mask. No original Limelight wordmark is displayed.",
+  "panel_source": {
+    "rect_top_origin": [
+      80,
+      120,
+      1760,
+      840
+    ],
+    "use": "Original rounded grey gradient panel; outside yellow keyed only in 24px corner areas at runtime.",
+    "shadow": {
+      "reference": "file__bg0.png and user screenshot 2026-09-24 15.45.53",
+      "source_limitation": "Shadow is flattened against the original scenery, not a standalone alpha panel. User authorized matched reconstruction.",
+      "implementation": "ArchivePaperShadow cached UI mesh; black Gaussian-like alpha profile sigma 4, core .16/outline .08, spread 12, y+2, corner radius 16. No texture rewrite or frame-by-frame filtering.",
+      "acceptance": "Reference-informed fit; visual comparison deferred with next batch, not asserted pixel-identical."
+    }
+  },
+  "polish_controls": {
+    "page_buttons": "file.json _pgbtn minus/plus off/over/on; original cr=1 restored with Image rotation, orange mapped to campus blue",
+    "track": "existing generated settings-tracks.png, vertical 484x8",
+    "thumb": "existing generated paper plane, 54x54 (source slider normal=50x50)",
+    "footer": "existing ticket/art, widened to 440x78; art stays in white area",
+    "help": "shared settings-help.png and animated AdvSettingsHelp"
+  }
+}

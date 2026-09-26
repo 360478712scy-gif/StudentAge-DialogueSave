@@ -1,0 +1,28 @@
+{
+  "tool": "image_gen.imagegen",
+  "date": "2026-09-23",
+  "sources": [
+    "limelight-ui-extraction/png/uipsd/option__bg0.png",
+    "limelight-ui-extraction/png/uipsd/option__pack.png",
+    "limelight-ui-extraction/sprites/uipsd/option_01_jp/frame__null_.png"
+  ],
+  "redraw": "Campus backdrop, footer artwork and paper-plane controls are redrawn. Top tabs and middle choice capsules use the original option atlas; configuration cards use the original frame. Top and middle labels are live text.",
+  "generated": {
+    "settings-background.png": "exec-4c868395-1a11-413a-98b5-9d441df09052.png",
+    "settings-controls.png": "exec-b50d373c-aff5-4d61-bd2d-b7b2c992be5e.png",
+    "settings-card.png": "exec-6b444f69-8012-4230-b493-1bb34bddeb5b.png",
+    "settings-lettering.png": "exec-5da278c2-4769-4e92-9920-72c991dbb497.png",
+    "settings-tracks.png": "exec-4034c06a-7d64-4551-97b8-f766aa23031a.png",
+    "settings-tabs.png": "exec-16810d7e-d3b9-4cc4-8954-f30dc1d5adca.png",
+    "settings-help.png": "exec-fc052077-26d1-4796-85a6-279b3768f553.png"
+  },
+  "original_assets": {
+    "settings-source-frame.png": "limelight-ui-extraction/sprites/uipsd/option_01_jp/frame__null_.png",
+    "settings-heading-icon.png": "limelight-ui-extraction/sprites/uipsd/option_01_jp/_jump_off.png",
+    "settings-source-controls.png": "limelight-ui-extraction/png/uipsd/option__pack.png"
+  },
+  "unused_generated_assets": [
+    "settings-card.png",
+    "settings-tabs.png"
+  ]
+}

@@ -27,11 +27,13 @@ public static class RuntimeHotfixQA
     public static IEnumerator Run(DialogueCheckpointAdapter adapter, DialogueUiController ui, IDialogueUiService api,
         Action<bool,string> check, Func<Func<bool>,float,string,IEnumerator> until, string root)
     {
+        DG.Tweening.DOTween.logBehaviour=DG.Tweening.LogBehaviour.Verbose;
         var service=(DialogueSaveService)api;
         yield return new WaitForSecondsRealtime(1);
         var notice=UIMgr.GetTopView(ViewType.Guide,ViewType.Side);
         if(notice!=null && notice.GetType().Name=="CommonComfirmView")UIMgr.CloseView(notice);
         yield return until(()=>adapter.CanCapture(out _),25,"hotfix start at stable dialogue");
+        if(!File.Exists(Path.Combine(root,"comic-only.txt")))yield return RuntimePerformanceQA.Run(adapter,ui,api,check,until,root);
         var take=adapter.CaptureAsync();yield return until(()=>take.IsCompleted,40,"hotfix capture");
         var snapshot=take.GetAwaiter().GetResult();
         string savedLine=snapshot.Dialogue.Value<string>("talk");
@@ -54,7 +56,7 @@ public static class RuntimeHotfixQA
 
         var repo=new Repository(PathDefine.SAVE_PATH,Path.Combine(root,"data/hotfix-stage"),Path.Combine(root,"data/hotfix-backup"));
         var old=repo.Scan().Where(r=>r.Status==SaveStatus.Ready).OrderByDescending(r=>r.Header.CreatedUtc)
-            .FirstOrDefault(r=>repo.Load(r.Header.RevisionId).Dialogue.Value<int>("talkId")>=310107000 && repo.Load(r.Header.RevisionId).Dialogue.Value<int>("talkId")<310108000);
+            .FirstOrDefault(r=>SaveCodec.Decode(SaveCodec.Read(r.FilePath)).Dialogue.Value<int>("talkId")>=310107000 && SaveCodec.Decode(SaveCodec.Read(r.FilePath)).Dialogue.Value<int>("talkId")<310108000);
         if(old!=null)
         {
             byte[] oldBytes=File.ReadAllBytes(old.FilePath);
@@ -63,7 +65,8 @@ public static class RuntimeHotfixQA
             check(loaded.Success,"preexisting archive loads after mod compatibility fix: "+loaded.Message);
             check(Enumerable.SequenceEqual(oldBytes,File.ReadAllBytes(old.FilePath)),"old archive remains byte-for-byte unchanged");
         }
-        // Exercise actual save cards and the native paged description callback.
+        // Exercise the retained Original-mode cards and native description callback.
+        var tooltipStyle=AdvDialogueController.Active.Mode;AdvDialogueController.Active.SelectMode("Original");
         ui.Open(true);yield return until(()=>UIMgr.IsViewOpened<SaveView>() && !api.IsListing && !api.IsPreparingSave,40,"save card tooltip page ready");
         var descriptions=UIMgr.GetView<SaveView>().gameObject.GetComponentsInChildren<Description>(true)
             .Where(d=>d.getDescription!=null && d.getDescription(0).HasValue).ToArray();
@@ -71,6 +74,7 @@ public static class RuntimeHotfixQA
         foreach(var description in descriptions)check(!description.getDescription(1).HasValue,"tooltip stops after the first page");
         UIMgr.CloseView<SaveView>();yield return null;
 
+        AdvDialogueController.Active.SelectMode(tooltipStyle);
         // Actual screenshot story contains comic presentation commands.
         var comicTalk=Cfg.TalkCfgMap.Values.First(c=>c.id>=310107000 && c.id<310108000 && c.screenEffect?.Count>=3 && c.screenEffect[0]==4016);
         int comic=(int)comicTalk.screenEffect[1];
@@ -83,6 +87,14 @@ public static class RuntimeHotfixQA
             var pageTalk=Cfg.TalkCfgMap.Values.First(c=>c.id>=310107000 && c.id<310108000 && c.screenEffect?.Count>=3 && c.screenEffect[0]==4016 && (int)c.screenEffect[1]==comic && (int)c.screenEffect[2]==page);
             yield return until(()=>adapter.CanAdvancePresentation(view),15,"native comic transition ready");
             view.RefreshTalk(pageTalk.id);
+            float began=Time.realtimeSinceStartup;bool premature=false;
+            while(Time.realtimeSinceStartup-began<.5f)
+            {
+                var loadingPanel=AccessTools.Field(typeof(NewTalkView),"comicPanel").GetValue(view) as ComicView;
+                if(loadingPanel?.gameObject!=null && loadingPanel.txtex_talk.gameObject.activeInHierarchy && loadingPanel.txtex_talk.maxVisibleCharacters>0)premature=true;
+                yield return null;
+            }
+            check(!premature,"comic subtitle does not race its first panel fade "+n);
             yield return until(()=>AccessTools.Field(typeof(NewTalkView),"comicPanel").GetValue(view) is ComicView panelReady && panelReady.isViewReady && (int)AccessTools.Field(typeof(ComicView),"page").GetValue(panelReady)==page,20,"native story comic opens/reopens "+n);
             yield return new WaitForSecondsRealtime(2);
             var panel=(ComicView)AccessTools.Field(typeof(NewTalkView),"comicPanel").GetValue(view);
@@ -92,6 +104,24 @@ public static class RuntimeHotfixQA
             File.WriteAllText(Path.Combine(root,"results/comic-images-"+n+".json"),JArray.FromObject(panel.gameObject.GetComponentsInChildren<Image>(true).Select(i=>new {name=i.name,active=i.gameObject.activeInHierarchy,enabled=i.enabled,sprite=i.sprite==null?null:i.sprite.name,texture=i.sprite==null?null:i.sprite.texture.name,sibling=i.transform.parent.GetSiblingIndex(),position=i.rectTransform.anchoredPosition.ToString(),size=i.rectTransform.rect.size.ToString(),alpha=i.color.a,depth=i.depth,cull=i.canvasRenderer.cull,rendererAlpha=i.canvasRenderer.GetAlpha(),material=i.materialForRendering.name,overrideTexture=i.overrideSprite==null?null:i.overrideSprite.texture.name,ancestors=string.Join(" > ",i.GetComponentsInParent<Transform>(true).Select(t=>t.name+"["+t.GetSiblingIndex()+"]")),groups=string.Join(",",i.GetComponentsInParent<CanvasGroup>(true).Select(g=>g.name+":"+g.alpha))})).ToString());
             var pictures=panel.gameObject.GetComponentsInChildren<Image>(true).Where(i=>i.name=="icon_item" && i.gameObject.activeInHierarchy && i.enabled && i.sprite!=null).ToArray();
             check(pictures.Length>0,"comic illustrations visibly loaded on pass "+n);
+            check(!((TopView)UIMgr.GetView<TopView>()).itemgroup_key.gameObject.activeInHierarchy,"comic hides native operation toolbar");
+            var gate=AccessTools.Field(typeof(ComicPresentationAdapter),"gate").GetValue(null);
+            File.WriteAllText(Path.Combine(root,"results/comic-gate-"+n+".json"),new JObject{["gate"]=gate!=null,["ready"]=gate==null?false:(bool)AccessTools.Field(gate.GetType(),"Ready").GetValue(gate),["callback"]=gate!=null && AccessTools.Field(gate.GetType(),"Callback").GetValue(gate)!=null,["page"]=gate==null?0:(int)AccessTools.Field(gate.GetType(),"Page").GetValue(gate),["leadUrl"]=gate==null?null:(string)AccessTools.Field(gate.GetType(),"LeadUrl").GetValue(gate),["cellUrls"]=JArray.FromObject(panel.gameObject.GetComponentsInChildren<Image>(true).Where(i=>i.name=="icon_item").Select(i=>i.sprite?.name)),["captionActive"]=panel.txtex_talk.gameObject.activeSelf,["captionText"]=panel.txtex_talk.text,["state"]=view.talkState.ToString()}.ToString());
+            var pool=AccessTools.Field(typeof(ComicView),"pool").GetValue(panel);
+            var cellList=(System.Collections.IEnumerable)AccessTools.Field(pool.GetType(),"showingList").GetValue(pool);
+            var requests=AccessTools.Field(typeof(ComicPresentationAdapter),"requests").GetValue(null);
+            var requestRows=new JArray();
+            foreach(UICell nativeCell in cellList){object[] requestArgs={nativeCell,null};requests.GetType().GetMethod("TryGetValue").Invoke(requests,requestArgs);var req=requestArgs[1];
+                requestRows.Add(new JObject{["url"]=nativeCell.data as string,["hasRequest"]=req!=null,["leadMatches"]=req!=null && ReferenceEquals(AccessTools.Field(req.GetType(),"Lead").GetValue(req),gate),["ownerMatches"]=req!=null && ReferenceEquals(AccessTools.Field(req.GetType(),"Owner").GetValue(req),panel),["leadViewPanelMatches"]=gate!=null && ReferenceEquals(AccessTools.Field(typeof(NewTalkView),"comicPanel").GetValue(view),panel)});}
+            File.WriteAllText(Path.Combine(root,"results/comic-requests-"+n+".json"),requestRows.ToString());
+            var leadImage=gate==null?null:AccessTools.Field(gate.GetType(),"LeadImage").GetValue(gate) as Image;
+            var valid=gate==null?null:AccessTools.Field(gate.GetType(),"LeadValid").GetValue(gate) as Func<bool>;
+            File.WriteAllText(Path.Combine(root,"results/comic-clock-"+n+".json"),new JObject{
+                ["now"]=Time.realtimeSinceStartup,["completed"]=gate==null?0:(float)AccessTools.Field(gate.GetType(),"CompletedAt").GetValue(gate),
+                ["image"]=leadImage!=null,["active"]=leadImage!=null && leadImage.gameObject.activeInHierarchy,["enabled"]=leadImage!=null && leadImage.enabled,["alpha"]=leadImage==null?0:leadImage.color.a,["valid"]=valid?.Invoke()??false,
+                ["hosts"]=JArray.FromObject(Resources.FindObjectsOfTypeAll<DialogueRuntimeHost>().Select(h=>new{h.enabled,active=h.gameObject.activeInHierarchy,disposed=AccessTools.Field(h.GetType(),"disposed").GetValue(h)}))}.ToString());
+            yield return until(()=>panel.txtex_talk.gameObject.activeInHierarchy && panel.txtex_talk.maxVisibleCharacters>0,3,"comic caption follows rendered image on subsequent frame");
+            check(panel.txtex_talk.gameObject.activeInHierarchy,"comic native subtitle returns after picture ready");
             check(panel.txtex_talk.GetComponent<ContentSizeFitter>().enabled && panel.txtex_talk.transform.parent.name!="Reading","comic retains native font container and size fitter");
             check(!Resources.FindObjectsOfTypeAll<Canvas>().Any(c=>c.name=="DialogueSave.ADV" && c.gameObject.activeInHierarchy),"comic has no ADV overlay or controls");
             check(!Resources.FindObjectsOfTypeAll<Button>().Any(b=>b.name.StartsWith("DialogueSave.Hotkey") && b.gameObject.activeInHierarchy),"comic has no added native toolbar controls");

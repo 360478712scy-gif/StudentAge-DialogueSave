@@ -12,7 +12,7 @@ using Newtonsoft.Json;
 namespace StudentAgeDialogueSave.Storage
 {
     /// <summary>Owns only dialogue_*.dsav files. There is intentionally no uninstall cleanup.</summary>
-    public sealed class Repository
+    public sealed partial class Repository
     {
         private readonly string _saveDirectory;
         private readonly string _stagingDirectory;
@@ -20,6 +20,11 @@ namespace StudentAgeDialogueSave.Storage
         private readonly bool _retainLocalCopies;
         private readonly Action<string> _diagnostics;
         private readonly object _gate = new object();
+        sealed class VerifiedRow { internal string Hash; internal SaveRecord Record; }
+        readonly Dictionary<string,VerifiedRow> verifiedRows=new Dictionary<string,VerifiedRow>(StringComparer.Ordinal);
+        internal int LastScanDecodedFiles {get;private set;}
+        internal int LastScanReusedFiles {get;private set;}
+        static SaveRecord CopyRecord(SaveRecord row)=>new SaveRecord{SchemaVersion=row.SchemaVersion,Header=row.Header?.DetachedCopy(),FilePath=row.FilePath,Status=row.Status,Error=row.Error,PreviewBackgroundId=row.PreviewBackgroundId,PreviewSpeakerId=row.PreviewSpeakerId,PreviewImageUrl=row.PreviewImageUrl,PreviewText=row.PreviewText,PreviewOptionIds=row.PreviewOptionIds};
         private readonly long? _maximumTotalBytes;
         private readonly int? _maximumFiles;
         private const long TombstoneReserveBytes = 16L * 1024 * 1024;
@@ -76,7 +81,8 @@ namespace StudentAgeDialogueSave.Storage
                 if (snapshot.World == null || snapshot.World.Length > SaveCodec.MaximumWorldBytes || snapshot.Dialogue == null)
                     throw new InvalidDataException("存档数据缺失或超限。");
                 // Detach all user-owned objects before assigning repository metadata.
-                var value = SaveCodec.Token(snapshot).ToObject<SaveEnvelope>(SaveCodec.Serializer());
+                var value = new SaveEnvelope{SchemaVersion=snapshot.SchemaVersion,Kind=snapshot.Kind,Header=snapshot.Header?.DetachedCopy(),
+                    World=(byte[])snapshot.World.Clone(),Dialogue=(Newtonsoft.Json.Linq.JObject)snapshot.Dialogue.DeepClone()};
                 if (value.Header == null) throw new InvalidDataException("存档头部缺失。");
                 value.Header.RevisionId = Guid.NewGuid().ToString("N");
                 value.Header.CreatedUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture);
@@ -109,7 +115,9 @@ namespace StudentAgeDialogueSave.Storage
                     // No copy fallback: a cross-device publish must fail, not expose a partial file.
                     AtomicPublish(stage, target);
                     PreserveLocalCopy(target);
-                    return new SaveRecord { Header = value.Header, FilePath = target, SchemaVersion = 1, Status = value.Kind == "tombstone" ? SaveStatus.Deleted : SaveStatus.Ready };
+                    var published=new SaveRecord { PreviewImageUrl=(string)(value.Dialogue?["cg"] as Newtonsoft.Json.Linq.JObject)?["url"],PreviewBackgroundId=(int?)value.Dialogue?["background"]??0,PreviewSpeakerId=(int?)value.Dialogue?["speakerId"]??0, Header = value.Header, FilePath = target, SchemaVersion = 1, Status = value.Kind == "tombstone" ? SaveStatus.Deleted : SaveStatus.Ready };
+                    verifiedRows[target]=new VerifiedRow{Hash=SaveCodec.Hash(bytes),Record=CopyRecord(published)};
+                    return published;
                 }
                 finally
                 {
@@ -132,6 +140,7 @@ namespace StudentAgeDialogueSave.Storage
                 CheckDirectoryLinks(_saveDirectory); CheckFileLink(path);
                 SaveEnvelope value = SaveCodec.Decode(SaveCodec.Read(path));
                 if (value.Header.RevisionId != revisionId) throw new InvalidDataException("文件名与存档版本不一致。");
+                if(!Committed(value.Header))throw new InvalidDataException("交换事务尚未完整同步，请稍后再读。");
                 if (value.Kind != "checkpoint") throw new InvalidDataException("此版本是删除标记，不能加载。");
                 if (records.Any(x => x.Status == SaveStatus.Deleted && SlotKey(x.Header) == SlotKey(value.Header) && x.Header.ParentRevisionIds.Contains(revisionId)))
                     throw new InvalidDataException("此存档已删除。");
@@ -145,6 +154,8 @@ namespace StudentAgeDialogueSave.Storage
             {
                 CheckDirectoryLinks(_saveDirectory);
                 RestoreMissingLocalCopies();
+                var retained=RetainedNames();
+                LastScanDecodedFiles=LastScanReusedFiles=0;
                 var records = new List<SaveRecord>();
                 if (!Directory.Exists(_saveDirectory)) return records;
                 foreach (string path in Directory.GetFiles(_saveDirectory, "dialogue_*.dsav", SearchOption.TopDirectoryOnly))
@@ -155,7 +166,17 @@ namespace StudentAgeDialogueSave.Storage
                         string name = Path.GetFileNameWithoutExtension(path).Substring("dialogue_".Length);
                         SaveCodec.Revision(name);
                         CheckFileLink(path);
-                        var root = SaveCodec.Read(path);
+                        // Always read/hash current bytes, including conflict checks. Size,
+                        // mtime and TTL cannot prove that a cloud/external edit is unchanged.
+                        var bytes=SaveCodec.ReadBytes(path);string hash=SaveCodec.Hash(bytes);
+                        if(verifiedRows.TryGetValue(path,out var cached) && cached.Hash==hash)
+                        {
+                            records.Add(CopyRecord(cached.Record));LastScanReusedFiles++;
+                            if(cached.Record.Status==SaveStatus.Ready || cached.Record.Status==SaveStatus.Deleted)PreserveLocalCopy(path,retained);
+                            continue;
+                        }
+                        LastScanDecodedFiles++;
+                        var root = SaveCodec.Read(bytes);
                         record.SchemaVersion = (int?)root["SchemaVersion"] ?? 0;
                         if (record.SchemaVersion > 1)
                         {
@@ -168,19 +189,31 @@ namespace StudentAgeDialogueSave.Storage
                         {
                             SaveEnvelope value = SaveCodec.Decode(root);
                             if (value.Header.RevisionId != name) throw new InvalidDataException("文件名与存档版本不一致。");
+                            record.PreviewImageUrl=(string)(value.Dialogue?["cg"] as Newtonsoft.Json.Linq.JObject)?["url"];
+                            record.PreviewBackgroundId=(int?)value.Dialogue?["background"]??0;
+                            record.PreviewSpeakerId=(int?)value.Dialogue?["speakerId"]??0;
+                            var segments=value.Dialogue?["segments"] as Newtonsoft.Json.Linq.JArray;int index=(int?)value.Dialogue?["segmentIndex"]??-1;
+                            record.PreviewText=(string)value.Dialogue?["choiceSummary"] ?? (string)(segments!=null && index>=0 && index<segments.Count?segments[index]:value.Dialogue?["talk"]);
+                            if((string)value.Dialogue?["phase"]=="Option" && value.Dialogue?["options"] is Newtonsoft.Json.Linq.JArray opts)
+                                record.PreviewOptionIds=opts.Select(o=>(int)o["id"]).ToArray();
                             record.Header = value.Header;
                             record.Status = value.Kind == "tombstone" ? SaveStatus.Deleted : SaveStatus.Ready;
-                            PreserveLocalCopy(path);
+                            PreserveLocalCopy(path,retained);
                         }
+                        verifiedRows[path]=new VerifiedRow{Hash=hash,Record=CopyRecord(record)};
                     }
                     catch (Exception error) when (error is IOException || error is InvalidDataException || error is UnauthorizedAccessException || error is JsonException || error is ArgumentException || error is OverflowException || error is FormatException)
                     {
                         record.Status = SaveStatus.Corrupt;
                         record.Error = error.Message;
+                        verifiedRows.Remove(path);
                     }
                     records.Add(record);
                 }
+                foreach(var row in records)if((row.Status==SaveStatus.Ready || row.Status==SaveStatus.Deleted) && !Committed(row.Header))row.Status=SaveStatus.Pending;
                 FindHeads(records);
+                var live=new HashSet<string>(records.Select(r=>r.FilePath),StringComparer.Ordinal);
+                foreach(string missing in verifiedRows.Keys.Where(p=>!live.Contains(p)).ToArray())verifiedRows.Remove(missing);
                 return records;
             }
         }
@@ -188,9 +221,19 @@ namespace StudentAgeDialogueSave.Storage
         // Retained revisions live outside the game's cloud save directory and plugin install.
         // The worker running publication/listing owns this I/O; no main-thread copying.
         private string LocalCopies => Path.Combine(_backupDirectory, "Retained");
-        private void PreserveLocalCopy(string source)
+        private HashSet<string> RetainedNames()
         {
-            if (!_retainLocalCopies) return;
+            if(!_retainLocalCopies)return null;
+            try
+            {
+                CheckDirectoryLinks(LocalCopies);
+                return new HashSet<string>(Directory.Exists(LocalCopies)?Directory.GetFiles(LocalCopies,"dialogue_*.dsav").Select(Path.GetFileName):Enumerable.Empty<string>(),StringComparer.Ordinal);
+            }
+            catch(Exception ex) when(ex is IOException || ex is UnauthorizedAccessException){return null;}
+        }
+        private void PreserveLocalCopy(string source,HashSet<string> existing=null)
+        {
+            if (!_retainLocalCopies || existing?.Contains(Path.GetFileName(source))==true) return;
             try
             {
                 CheckDirectoryLinks(LocalCopies);
@@ -211,10 +254,11 @@ namespace StudentAgeDialogueSave.Storage
                 // Include tombstones: cloud disappearance must not resurrect deliberately
                 // deleted saves, nor select one branch over another by timestamp.
                 Directory.CreateDirectory(_saveDirectory);
+                var present=new HashSet<string>(Directory.GetFiles(_saveDirectory,"dialogue_*.dsav").Select(Path.GetFileName),StringComparer.Ordinal);
                 foreach (string source in Directory.GetFiles(LocalCopies, "dialogue_*.dsav"))
                 {
                     string target = Path.Combine(_saveDirectory, Path.GetFileName(source));
-                    if (File.Exists(target)) continue; // Never overwrite a conflict or corrupt original.
+                    if (present.Contains(Path.GetFileName(source))) continue; // Atomic publication still never overwrites a newly arriving file.
                     try { CopyVerifiedRevision(source, target, _stagingDirectory); }
                     catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is InvalidDataException || ex is Win32Exception || ex is JsonException || ex is ArgumentException || ex is FormatException || ex is OverflowException)
                     { LocalCopyWarning("本地副本恢复未完成，原文件保留：" + ex.Message); }
@@ -226,7 +270,8 @@ namespace StudentAgeDialogueSave.Storage
         private static void CopyVerifiedRevision(string source, string target, string stagingDirectory)
         {
             CheckFileLink(source); CheckFileLink(target);
-            var value = SaveCodec.Decode(SaveCodec.Read(source));
+            var sourceBytes=SaveCodec.ReadBytes(source);
+            var value = SaveCodec.Decode(SaveCodec.Read(sourceBytes));
             string expected = "dialogue_" + value.Header.RevisionId + ".dsav";
             if (Path.GetFileName(source) != expected || Path.GetFileName(target) != expected)
                 throw new InvalidDataException("本地副本文件名与存档版本不一致。");
@@ -235,12 +280,11 @@ namespace StudentAgeDialogueSave.Storage
             string temp = Path.Combine(stagingDirectory, "." + Guid.NewGuid().ToString("N") + ".pending");
             try
             {
-                using (var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read))
                 using (var output = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-                { input.CopyTo(output); output.Flush(true); }
-                // Validate the actual bytes copied, including a concurrent cloud change.
-                var copied = SaveCodec.Decode(SaveCodec.Read(temp));
-                if (copied.EnvelopeSha256 != value.EnvelopeSha256)
+                { output.Write(sourceBytes,0,sourceBytes.Length); output.Flush(true); }
+                // Copy exactly the fully validated source snapshot, then verify actual
+                // disk bytes. No second JSON/base64 expansion is necessary.
+                if (SaveCodec.Hash(SaveCodec.ReadBytes(temp)) != SaveCodec.Hash(sourceBytes))
                     throw new InvalidDataException("复制时存档内容发生变化。");
                 try { AtomicPublish(temp, target); }
                 catch (Exception ex) when ((ex is IOException || ex is Win32Exception) && File.Exists(target)) { }
@@ -291,6 +335,8 @@ namespace StudentAgeDialogueSave.Storage
                     input.CopyTo(output);
                     output.Flush(true);
                 }
+                bool transactionBody=!string.IsNullOrEmpty(original.Header.TransactionId);
+                original.Header.TransactionId=null;
                 original.Header.ParentRevisionIds = deletedAncestors;
                 original.Kind = "tombstone";
                 original.World = new byte[0];
@@ -298,7 +344,7 @@ namespace StudentAgeDialogueSave.Storage
                 PublishInternal(original);
                 // The durable marker is the logical commit. A cloud client may still hold
                 // the old body open; failure to reclaim it cannot undo that deletion.
-                try { File.Delete(path); }
+                try { if(!transactionBody)File.Delete(path); }
                 catch (IOException) { }
                 catch (UnauthorizedAccessException) { }
             }

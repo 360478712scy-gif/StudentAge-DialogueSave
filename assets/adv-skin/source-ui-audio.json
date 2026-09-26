@@ -1,0 +1,23 @@
+{
+  "hover.wav": {
+    "source": "data.xp3",
+    "entry": "entry_00555_522a.bin",
+    "name": "【システム】カーソル１.ogg",
+    "source_sha256": "c58e0910a33baa76459638035e52d19458ba30ab7c63509ccd3139cd94b14039",
+    "pcm_sha256": "ecba73b01f584701ef4befe42e383cbfb245af654edbe3395aa103d1284bbbca"
+  },
+  "click.wav": {
+    "source": "data.xp3",
+    "entry": "entry_00560_522f.bin",
+    "name": "【システム】決定１.ogg",
+    "source_sha256": "26fbeb219e4c54de2eb4de9abc5d2e1c885e11f9fa964a5b52e49b35da4a2cd7",
+    "pcm_sha256": "ba55a7f81fb265ac6198f33185ba5de2ad7a393b922ebda1f50aea84a63f1751"
+  },
+  "toggle.wav": {
+    "source": "data.xp3",
+    "entry": "entry_00558_522d.bin",
+    "name": "【システム】切替１.ogg",
+    "source_sha256": "2c4f863b5f7a871d54a82812ac2059416763ca4f108c800db1a19291e1e9d9d6",
+    "pcm_sha256": "ab30d51597059cdb205481f350706eaa736ad3182bb621a71ff106f573bc6b8a"
+  }
+}

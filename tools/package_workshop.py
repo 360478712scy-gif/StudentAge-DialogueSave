@@ -23,11 +23,11 @@ def main():
     (out / 'plugins').mkdir(parents=True)
     (out / 'readme').mkdir()
     shutil.copy2(dll, out / 'plugins/StudentAgeDialogueSave.dll')
-    shutil.copy2(ROOT / 'distribution/workshop/preview.png', out / 'preview.png')
+    shutil.copy2(ROOT / 'distribution/workshop/preview.jpg', out / 'preview.jpg')
     shutil.copy2(ROOT / 'docs/WORKSHOP.md', out / 'readme/使用说明.md')
     shutil.copy2(ROOT / 'assets/ui-previews/README.md', out / 'readme/预览图片说明.md')
     files = {str(p.relative_to(out)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(out.rglob('*')) if p.is_file()}
-    manifest = {'name': '对话中存档（仅测试版支持）', 'id': 'local.studentage.dialoguesave',
+    manifest = {'name': 'UI大修 · 对话中存档（仅测试版支持）', 'id': 'local.studentage.dialoguesave',
                 'version': version, 'author': '360478712scy-gif', 'game': 'StudentAge 1.94',
                 'requires': [], 'plugins': ['plugins/StudentAgeDialogueSave.dll'], 'files': files}
     (out / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')

@@ -12,6 +12,11 @@ namespace StudentAgeDialogueSave.GameIntegration
     internal sealed class DialogueUiResourceLease : IDisposable
     {
         readonly List<string> paths=new List<string>();
+        static int rebuilding;
+        static bool unloadPending;
+        bool disposed;
+        internal static void Install(Harmony harmony)=>harmony.Patch(AccessTools.Method(typeof(ResMgr),"UnloadUnusedAssets"),prefix:new HarmonyMethod(typeof(DialogueUiResourceLease),nameof(BeforeUnload)));
+        static bool BeforeUnload(){if(rebuilding==0)return true;unloadPending=true;return false;}
         static readonly System.Reflection.MethodInfo release=AccessTools.Method(typeof(ResMgr),"RecycleResInfo");
         internal DialogueUiResourceLease()
         {
@@ -27,6 +32,7 @@ namespace StudentAgeDialogueSave.GameIntegration
             }
             try
             {
+                rebuilding++;
                 foreach(string path in wanted)if(ResMgr.HasResLoaded(path))
                 {
                     ResMgr.Load<UnityEngine.Object>(path);paths.Add(path);
@@ -36,8 +42,10 @@ namespace StudentAgeDialogueSave.GameIntegration
         }
         public void Dispose()
         {
+            if(disposed)return;disposed=true;
             foreach(string path in paths)release.Invoke(null,new object[]{path});
             paths.Clear();
+            if(--rebuilding==0 && unloadPending){unloadPending=false;ResMgr.UnloadUnusedAssets();}
         }
     }
 }

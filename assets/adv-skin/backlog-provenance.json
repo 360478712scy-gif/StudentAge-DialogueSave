@@ -1,0 +1,28 @@
+{
+  "generated": [
+    "backlog-frame.png",
+    "backlog-date.png"
+  ],
+  "tool": "built-in imagegen",
+  "date": "2026-09-23",
+  "source_controls": "limelight-ui-extraction/sprites/uipsd/backlog_jp/{jump,top,end,pageup,pagedown}_{off,over,on}.png",
+  "source_alpha": {
+    "file": "png/uipsd/backlog__bg0.png",
+    "center_rgba": [
+      0,
+      34,
+      68,
+      230
+    ]
+  },
+  "layout_reference": "layouts/named/uipsd/backlog_jp.json",
+  "runtime_palette": [
+    8,
+    39,
+    72,
+    230
+  ],
+  "date_source": "RoundMgr.GetRound -> Cfg.RoundCfgMap.year/season -> Cfg.SeasonCfgMap.name",
+  "reused": "Settings campus ticket footer, paper-plane thumb and blue-gradient rail; settings opening shutter",
+  "prompts": "backlog-prompts.md"
+}

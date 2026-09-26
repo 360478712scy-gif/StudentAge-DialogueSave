@@ -1,0 +1,20 @@
+{
+  "reference_mapping": "/Users/yugonglian/Projects/limelight-ui-extraction/original/unencrypted/deffontmap.tjs",
+  "reference_sha256": "47da729fb3b8742cb3f2e32096675e56150cb2f9066cda401ef5733f53f50db9",
+  "mapping_excerpt": [
+    "\"lang_*\"  => \"微软雅黑\", // failsafe用",
+    "\"lang_jp\" => \"微软雅黑\",",
+    "\"lang_en\" => \"微软雅黑\",",
+    "\"シーダ\"   => \"微软雅黑\",",
+    "\"マルベリ\" => \"微软雅黑\",",
+    "\"$ハート$\" => \"微软雅黑\",",
+    "\"lang_jp\" => \"微软雅黑\", // \"*システム\" = 組み込み(cf. embfontlist.tjs)",
+    "\"lang_en\" => \"微软雅黑\",",
+    "\"lang_jp\" => \"微软雅黑\", // \"*ヘッダ\" = 組み込み(cf. embfontlist.tjs)",
+    "\"lang_en\" => \"微软雅黑\","
+  ],
+  "runtime_preferred": "Microsoft YaHei installed in OS (msyh.ttc/msyh.ttf); validate loaded face family",
+  "fallback": "StudentAge Source Han Sans CN; no Japanese font fallback added",
+  "redistributed_font_files": [],
+  "font_redistribution_reference": "https://learn.microsoft.com/en-us/typography/fonts/font-faq"
+}

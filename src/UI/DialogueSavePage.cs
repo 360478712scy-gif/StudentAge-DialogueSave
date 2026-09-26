@@ -409,18 +409,18 @@ namespace StudentAgeDialogueSave.UI
                         target.Record == null ? null : target.Record.RevisionId, done), false);
                 };
                 if (target.Record == null || (busy && pendingSaveKey == key)) write();
-                else HintHelper.ShowConfirm("覆盖这个对话存档？原版手动存档不受影响。", () =>
+                else StudentAgeDialogueSave.UI.AdvConfirmation.Ask("覆盖这个对话存档？原版手动存档不受影响。", () =>
                 {
                     if (!disposed && entered) write();
-                });
+                },key:"Overwrite");
             }
             else if (target.Record != null)
             {
-                HintHelper.ShowConfirm("读取这个对话存档？将离开当前进度。", () =>
+                StudentAgeDialogueSave.UI.AdvConfirmation.Ask("读取这个对话存档？将离开当前进度。", () =>
                 {
                     if (!disposed && entered)
                         Run(done => service.Load(target.Record.RevisionId, done), true);
-                });
+                },key:"Load");
             }
         }
 
@@ -430,11 +430,11 @@ namespace StudentAgeDialogueSave.UI
             var item = ItemAt(index);
             if (item == null || item.Record == null) return;
             string revision = item.Record.RevisionId;
-            HintHelper.ShowConfirm("删除这个对话存档版本？其他存档不受影响。", () =>
+            StudentAgeDialogueSave.UI.AdvConfirmation.Ask("删除这个对话存档版本？其他存档不受影响。", () =>
             {
                 if (!disposed && entered && !busy)
                     Run(done => service.Delete(revision, done), false);
-            });
+            },key:"Delete");
         }
 
         private void Run(Action<Action<UiResult>> start, bool closeOnSuccess)

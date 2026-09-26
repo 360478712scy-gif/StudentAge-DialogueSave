@@ -27,6 +27,8 @@ def main():
     previews = sorted((ROOT/'assets/ui-previews').glob('*.jpg'))
     if {p.stem for p in previews} != {'original','adv'}: raise SystemExit('Both UI preview images are required')
     command += ['-resource:'+str(p)+',DialogueSave.Preview.'+p.name for p in previews]
+    skin = sorted(p for p in (ROOT/'assets/adv-skin').iterdir() if p.suffix in ('.png','.json','.wav'))
+    command += ['-resource:'+str(p)+',DialogueSave.Skin.'+p.name for p in skin]
     command += ['-r:'+str(p) for p in refs] + [str(p) for p in sources]
     result = subprocess.run(command, capture_output=True, text=True)
     (ROOT/'qa/build.log').write_text(result.stdout + result.stderr)
@@ -34,6 +36,7 @@ def main():
     if result.returncode: raise SystemExit(result.returncode)
     manifest = {'dll_sha256':hashlib.sha256((out/'StudentAgeDialogueSave.dll').read_bytes()).hexdigest(), 'game_assembly_sha256':hashlib.sha256((args.game/'StudentAge_Data/Managed/Assembly-CSharp.dll').read_bytes()).hexdigest(), 'sources':{str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}}
     manifest['preview_assets'] = {str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in previews}
+    manifest['skin_assets'] = {str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in skin}
     (ROOT/'qa/build-manifest.json').write_text(json.dumps(manifest, indent=2))
     print('BUILD_OK', out/'StudentAgeDialogueSave.dll')
 

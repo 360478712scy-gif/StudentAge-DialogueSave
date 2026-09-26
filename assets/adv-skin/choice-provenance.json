@@ -1,0 +1,11 @@
+{
+  "source": "/Users/yugonglian/Projects/limelight-ui-extraction/sprites/uipsd/select/",
+  "copies": {
+    "choice-idle.png": "select_off.png",
+    "choice-hover.png": "select_over.png",
+    "choice-pressed.png": "select_on.png"
+  },
+  "generated": "choice-stationery-mask.png",
+  "prompt": "choice-stationery-prompt.md",
+  "runtime": "Undecorated source right cap mirrored for left cap; original center texture and rim retained. Orange hover/pressed pixels remapped blue once. Disabled texture grayscale. Generated stationery luminance becomes alpha. Existing window alpha gradient reused at 90px near bottom."
+}

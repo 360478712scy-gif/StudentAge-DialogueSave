@@ -80,12 +80,110 @@ internal static class StorageTests
         var durable=blocked.Publish(Sample());
         Check(File.Exists(durable.FilePath)&&warnings>0,"backup I/O failure does not misreport a durable primary commit as failed");
     }
+    private static void VerifyScanCache()
+    {
+        var repo=Repo("scan-cache");var sample=Sample();
+        sample.World=new byte[512*1024];new Random(29).NextBytes(sample.World);
+        for(int i=0;i<12;i++){sample.Header.LogicalSlot="perf-"+i;repo.Publish(sample);}
+        var clock=Stopwatch.StartNew();var cold=Repo("scan-cache");cold.Scan();double coldMs=clock.Elapsed.TotalMilliseconds;
+        clock.Restart();var rows=cold.Scan();double warmMs=clock.Elapsed.TotalMilliseconds;
+        Check(cold.LastScanDecodedFiles==0 && cold.LastScanReusedFiles==12,"warm listing hashes all files without decoding unchanged snapshots");
+        string id=rows[0].Header.RevisionId,path=rows[0].FilePath;
+        rows[0].Header.Summary="mutated external header";rows[0].Header.ParentRevisionIds=new[]{"fake"};
+        Check(cold.Scan().Single(r=>r.Header.RevisionId==id).Header.Summary!="mutated external header","cached verified metadata does not escape by reference");
+        var stamp=File.GetLastWriteTimeUtc(path);string contents=File.ReadAllText(path);
+        int at=contents.IndexOf("测试角色",StringComparison.Ordinal);Check(at>=0,"same-length tamper fixture exists");
+        File.WriteAllText(path,contents.Replace("测试角色","篡改角色"));File.SetLastWriteTimeUtc(path,stamp);
+        Check(cold.Scan().Single(r=>r.FilePath==path).Status!=SaveStatus.Ready && cold.LastScanDecodedFiles>0,"same-size same-time external change cannot hit verified cache");
+        Reject(()=>cold.Load(id),"load rejects tampered cached revision");
+        Console.WriteLine($"SCAN_PERF files=12 cold_ms={coldMs:F1} warm_ms={warmMs:F1}");
+    }
+    private static void VerifyArchiveOverwrite()
+    {
+        var repo=Repo("archive-overwrite");var old=repo.PublishChecked(Sample(slot:"1"));
+        var newer=Sample(slot:"1");newer.World=new byte[]{7,7,7};newer.Header.ParentRevisionIds=new[]{old.Header.RevisionId};
+        var saved=repo.PublishReplacing(newer,old.Header.RevisionId);
+        Check(Repository.FindHeads(repo.Scan()).Single().Header.RevisionId==saved.Header.RevisionId,"overwrite same run keeps one visible slot");
+        Reject(()=>repo.PublishReplacing(newer,old.Header.RevisionId),"stale overwrite cannot replace newer save");
+        var other=Sample(run:"run-b",slot:"1");other.World=new byte[]{9,9,9};
+        var cross=repo.PublishReplacing(other,saved.Header.RevisionId);
+        Check(Repository.FindHeads(repo.Scan()).Single().Header.RunId=="run-b" && repo.Load(cross.Header.RevisionId).World.SequenceEqual(other.World),"cross-run overwrite preserves new world and run identity with one visible slot");
+        string dir=Path.GetDirectoryName(cross.FilePath),marker=Path.Combine(dir,"dialogue_tx_"+cross.Header.TransactionId+".commit");
+        string receipt=File.ReadAllText(marker);File.Delete(marker);File.Delete(Path.Combine(_root,"archive-overwrite","Backups","Transactions",cross.Header.TransactionId+".commit"));
+        Check(Repository.FindHeads(repo.Scan()).Single().Header.RevisionId==saved.Header.RevisionId,"missing overwrite receipt leaves old save visible");
+        File.WriteAllText(marker,receipt);File.Move(cross.FilePath,cross.FilePath+".offline");
+        Check(Repository.FindHeads(repo.Scan()).Single().Header.RevisionId==saved.Header.RevisionId,"missing new overwrite body cannot delete old save");
+        File.Move(cross.FilePath+".offline",cross.FilePath);
+        Check(Repository.FindHeads(repo.Scan()).Single().Header.RevisionId==cross.Header.RevisionId,"complete overwrite transaction becomes visible again");
+        var occupied=repo.PublishChecked(Sample(run:"run-c",slot:"1"));
+        Reject(()=>repo.PublishReplacing(Sample(run:"run-c",slot:"1"),cross.Header.RevisionId),"cross-run overwrite cannot replace unrelated occupied destination");
+        repo.Delete(cross.Header.RevisionId);
+        Check(Repository.FindHeads(repo.Scan()).Single().Header.RevisionId==occupied.Header.RevisionId,"deleting replacement never resurrects overwritten save");
+    }
+    private static void VerifyArchiveEdits()
+    {
+        var repo=Repo("archive-edits");var a=Sample(slot:"1");a.World=new byte[]{1,2,3};a.Dialogue["background"]=123;a.Dialogue["speakerId"]=456;
+        var first=repo.Publish(a);var b=Sample(slot:"2");b.World=new byte[]{9,8,7};var second=repo.Publish(b);
+        var legacy=SaveCodec.Token(repo.Load(first.Header.RevisionId));
+        Check(legacy["Header"]["TransactionId"]==null && legacy["Header"]["Comment"]==null && legacy["Header"]["PreviewImageUrl"]==null,"optional metadata does not alter legacy null serialization");
+        repo.EditSlots("note",first.Header.RevisionId,"1",first.Header.RevisionId,"我的备注");
+        var note=Repository.FindHeads(repo.Scan()).Single(r=>r.Header.LogicalSlot=="1");var noted=repo.Load(note.Header.RevisionId);
+        Check(noted.Header.Comment=="我的备注" && noted.Header.SavedUtc==first.Header.CreatedUtc && noted.World.SequenceEqual(a.World) && JToken.DeepEquals(noted.Dialogue,a.Dialogue),"note is a new revision retaining timestamp world and continuation");
+        Reject(()=>repo.EditSlots("copy",first.Header.RevisionId,"3",null),"stale source selection cannot copy");
+        repo.EditSlots("copy",note.Header.RevisionId,"3",null);var copy=Repository.FindHeads(repo.Scan()).Single(r=>r.Header.LogicalSlot=="3");
+        Check(copy.Header.RevisionId!=note.Header.RevisionId && repo.Load(copy.Header.RevisionId).World.SequenceEqual(a.World),"copy is independent and complete");
+        Reject(()=>repo.EditSlots("copy",note.Header.RevisionId,"3",null),"stale empty target cannot overwrite");
+        repo.EditSlots("swap",note.Header.RevisionId,"2",second.Header.RevisionId);
+        var heads=Repository.FindHeads(repo.Scan());var one=heads.Single(r=>r.Header.LogicalSlot=="1");var two=heads.Single(r=>r.Header.LogicalSlot=="2");
+        Check(repo.Load(one.Header.RevisionId).World.SequenceEqual(b.World) && repo.Load(two.Header.RevisionId).World.SequenceEqual(a.World) && two.Header.Comment=="我的备注","exchange moves both complete bodies and notes atomically");
+        string directory=Path.GetDirectoryName(one.FilePath),marker=Path.Combine(directory,"dialogue_tx_"+one.Header.TransactionId+".commit");
+        string receipt=File.ReadAllText(marker);File.Delete(marker);File.Delete(Path.Combine(_root,"archive-edits","Backups","Transactions",one.Header.TransactionId+".commit"));
+        heads=Repository.FindHeads(repo.Scan());
+        Check(heads.Any(r=>r.Header.RevisionId==note.Header.RevisionId) && heads.Any(r=>r.Header.RevisionId==second.Header.RevisionId) && repo.Scan().Count(r=>r.Status==SaveStatus.Pending)==2,"missing exchange receipt leaves both old slots visible");
+        File.WriteAllText(marker,receipt);string moved=two.FilePath+".offline";File.Move(two.FilePath,moved);
+        Check(!Repository.FindHeads(repo.Scan()).Any(r=>r.Header.RevisionId==one.Header.RevisionId),"receipt before second cloud body never exposes half an exchange");
+        File.Move(moved,two.FilePath);string bytes=File.ReadAllText(two.FilePath);File.WriteAllText(two.FilePath,bytes.Replace("我的备注","坏的备注"));
+        Check(!Repository.FindHeads(repo.Scan()).Any(r=>r.Header.RevisionId==one.Header.RevisionId),"corrupt peer also prevents half exchange");File.WriteAllText(two.FilePath,bytes);
+        repo.Delete(one.Header.RevisionId);
+        Check(Repository.FindHeads(repo.Scan()).Any(r=>r.Header.RevisionId==two.Header.RevisionId) && !Repository.FindHeads(repo.Scan()).Any(r=>r.Header.LogicalSlot=="1"),"deleting exchanged slot neither invalidates its peer nor resurrects ancestors");
+        repo.EditSlots("swap",copy.Header.RevisionId,"4",null);heads=Repository.FindHeads(repo.Scan());
+        Check(!heads.Any(r=>r.Header.LogicalSlot=="3") && repo.Load(heads.Single(r=>r.Header.LogicalSlot=="4").Header.RevisionId).World.SequenceEqual(a.World),"exchange with empty slot atomically moves and tombstones source");
+        var cold=Repo("archive-edits");var preview=cold.Scan().First(r=>r.Header.RevisionId==first.Header.RevisionId);
+        Check(preview.PreviewBackgroundId==123 && preview.PreviewSpeakerId==456,"old-format preview metadata comes from verified body without rewriting it");
+        var withoutCg=Sample(slot:"20");withoutCg.Dialogue["cg"]=JValue.CreateNull();var plain=repo.Publish(withoutCg);
+        Check(repo.Load(plain.Header.RevisionId).Dialogue["cg"].Type==JTokenType.Null,"ordinary null CG snapshot publishes and loads");
+        var withCg=Sample(slot:"21");withCg.Dialogue["cg"]=new JObject{["id"]=101,["url"]="cg/test",["mini"]=false,["scale"]=new JArray(1.05f,1.05f,1.05f)};withCg.Header.PreviewImageUrl="cg/test";var cgSave=repo.Publish(withCg);
+        var scanCg=Repo("archive-edits").Scan().Single(r=>r.Header.RevisionId==cgSave.Header.RevisionId);
+        Check(scanCg.PreviewImageUrl=="cg/test" && scanCg.Header.PreviewImageUrl=="cg/test","CG resource survives disk scan and header roundtrip");
+        Check(Repo("archive-edits").Scan().Single(r=>r.Header.RevisionId==plain.Header.RevisionId).Status==SaveStatus.Ready,"null CG remains valid on cold scan");
+        var conflicting=repo.Publish(Sample(slot:"2"));Reject(()=>repo.EditSlots("note",two.Header.RevisionId,"2",two.Header.RevisionId,"x"),"editing an unresolved device branch is rejected");
+        var nativeDir=Path.Combine(_root,"native-edits");Directory.CreateDirectory(nativeDir);var backup=Path.Combine(_root,"native-backup");
+        File.WriteAllText(Path.Combine(nativeDir,"a.save"),"original-a");File.WriteAllText(Path.Combine(nativeDir,"b.save"),"original-b");
+        var layout=JObject.Parse("{slots:{'1':'a.save','2':'b.save'},notes:{'a.save':'note-a'}}");string index=Path.Combine(nativeDir,"dialogue_native_layout.json");
+        NativeSlotEdits.Apply(nativeDir,backup,"",layout,"copy",1,2,null,"copy.save");layout=JObject.Parse(File.ReadAllText(index));
+        Check(File.ReadAllText(Path.Combine(nativeDir,"copy.save"))=="original-a" && File.ReadAllText(Path.Combine(nativeDir,"a.save"))=="original-a" && Directory.GetFiles(backup).Any(p=>File.ReadAllText(p)=="original-b") && (string)layout["notes"]["copy.save"]=="note-a","native replacement retains old target and copies complete source plus note");
+        Reject(()=>NativeSlotEdits.Apply(nativeDir,backup,"",layout,"delete",1,1,null),"native stale index rejected before deletion");
+        NativeSlotEdits.Apply(nativeDir,backup,NativeSlotEdits.Fingerprint(index),layout,"swap",1,4,null);layout=JObject.Parse(File.ReadAllText(index));
+        Check(layout["slots"]["1"]==null && (string)layout["slots"]["4"]=="a.save" && File.Exists(Path.Combine(nativeDir,"a.save")),"native empty exchange changes arrangement without touching game body");
+        NativeSlotEdits.Apply(nativeDir,backup,NativeSlotEdits.Fingerprint(index),layout,"delete",4,4,null);layout=JObject.Parse(File.ReadAllText(index));
+        Check(!File.Exists(Path.Combine(nativeDir,"a.save")) && layout["hidden"].Values<string>().Contains("a.save") && Directory.GetFiles(backup).Any(p=>File.ReadAllText(p)=="original-a"),"native deletion durable index and independent backup survive interrupted cleanup");
+        Reject(()=>NativeSlotEdits.Apply(nativeDir,backup,NativeSlotEdits.Fingerprint(index),layout,"copy",2,5,null,"../escape.save"),"native filename traversal rejected");
+        string linked=Path.Combine(_root,"native-linked");Directory.CreateSymbolicLink(linked,nativeDir);
+        Reject(()=>NativeSlotEdits.Apply(linked,backup,NativeSlotEdits.Fingerprint(index),layout,"note",2,2,"bad"),"native linked directory below volume root rejected");
+        File.CreateSymbolicLink(Path.Combine(nativeDir,"linked.save"),Path.Combine(nativeDir,"copy.save"));
+        var linkedLayout=(JObject)layout.DeepClone();linkedLayout["slots"]["9"]="linked.save";
+        Reject(()=>NativeSlotEdits.Apply(nativeDir,backup,NativeSlotEdits.Fingerprint(index),linkedLayout,"note",9,9,"bad"),"native linked file rejected");
+    }
     private static void Main(string[] args)
     {
         if (args.Length > 0 && args[0] == "publish-worker") { PublishWorker(args); return; }
         _root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "StorageSandbox", Guid.NewGuid().ToString("N")));
         Directory.CreateDirectory(_root);
+        VerifyArchiveOverwrite();
+        VerifyArchiveEdits();
+        if(args.Contains("--archive-edits")){Console.WriteLine("ARCHIVE_TESTS_OK "+_count);return;}
         VerifyLocalCopies();
+        VerifyScanCache();
         var repo = Repo("basic");
         var original = Sample();
         var first = repo.Publish(original);
