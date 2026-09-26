@@ -92,7 +92,8 @@ namespace StudentAgeDialogueSave.UI
         }
         static readonly System.Reflection.FieldInfo CfgField=AccessTools.Field(typeof(NewTalkView),"cfg"),
             AutoField=AccessTools.Field(typeof(NewTalkView),"enableAutoTalk"),TypeField=AccessTools.Field(typeof(NewTalkView),"talkType"),
-            CgField=AccessTools.Field(typeof(NewTalkView),"isShowingCG");
+            CgField=AccessTools.Field(typeof(NewTalkView),"isShowingCG"),
+            DelayingField=AccessTools.Field(typeof(NewTalkView),"isDelaying"),PhoneField=AccessTools.Field(typeof(NewTalkView),"isPhoneing");
         static readonly System.Reflection.FieldInfo SpeedField=AccessTools.Field(typeof(NewTalkView),"txtSpeed");
         static readonly System.Reflection.MethodInfo AutoMethod=AccessTools.Method(typeof(NewTalkView),"AutoTalk"),
             NextMethod=AccessTools.Method(typeof(NewTalkView),"OnClickNext"),
@@ -311,7 +312,9 @@ namespace StudentAgeDialogueSave.UI
             if(skipping)
             {
                 if(talk.talkState==TalkState.Option || key==null || (!Preferences.SkipUnread.Value && !readLines.Contains(key) && !Singleton<GlobalMgr>.Ins.HasSeenTalk(cfg.id)))skipping=false;
-                else if(Time.unscaledTime>=nextSkip && adapter.CanCapture(out _))
+                // Advance whenever the presentation may move on; saveability (phone calls,
+                // effects) is irrelevant to fast-forward and used to stall it.
+                else if(Time.unscaledTime>=nextSkip && adapter.CanAdvancePresentation(talk) && !(bool)DelayingField.GetValue(talk))
                 {nextSkip=Time.unscaledTime+.1f;NextMethod.Invoke(talk,null);}
             }
             if(Time.unscaledTime>=nextHistory)
@@ -656,9 +659,18 @@ namespace StudentAgeDialogueSave.UI
         {
             if(!adapter.CanAdvancePresentation(talk))return;
             if(talk.talkState==TalkState.Option || talk.talkState==TalkState.ShowPaper){sceneSkipPending=false;return;}
-            if((bool)AccessTools.Field(typeof(NewTalkView),"isDelaying").GetValue(talk))return;
+            if((bool)DelayingField.GetValue(talk))return;
             var cfg=CfgField.GetValue(talk) as TalkCfg;if(cfg==null){sceneSkipPending=false;return;}
-            if(!Preferences.SkipUnread.Value && !Singleton<GlobalMgr>.Ins.HasSeenTalk(cfg.id)){sceneSkipPending=false;return;}
+            // Like the native skip button, skipping a scene does not depend on read state;
+            // the "fast-forward range" setting only governs fast-forward.
+            // Native skip jumps over the hang-up line during a call, leaving the call state on
+            // and every later character hidden. Play the call out line by line first.
+            if((bool)PhoneField.GetValue(talk))
+            {
+                if(Time.unscaledTime>=nextSkip){nextSkip=Time.unscaledTime+.1f;NextMethod.Invoke(talk,null);}
+                if(talk.viewState!=ViewState.Opened)sceneSkipPending=false;
+                return;
+            }
             if(cfg.GetNextTalk()==0 && (cfg.option==null || cfg.option.Count==0) && (cfg.miniGame==null || cfg.miniGame.Count==0))
             {
                 // Native advance owns final effects and the continuation callback.
