@@ -182,21 +182,25 @@ namespace StudentAgeDialogueSave.UI
     internal sealed class DesignStage:MonoBehaviour
     {
         readonly Dictionary<RectTransform,Vector2> positions=new Dictionary<RectTransform,Vector2>();
-        Vector2 lastSize=new Vector2(-1,-1);int lastCount=-1;
-        void LateUpdate()
+        // Runs just before canvases render, so children created this frame (tab rebuilds,
+        // transition slats) are never drawn at their uncentered design position.
+        void OnEnable(){Canvas.willRenderCanvases+=Apply;Apply();}
+        void OnDisable(){Canvas.willRenderCanvases-=Apply;}
+        // Expand scaler: canvas = screen / min(screen/reference), known before the scaler runs.
+        internal static Vector2 CanvasSize(){float scale=Mathf.Min(Screen.width/1920f,Screen.height/1080f);return scale<=0?new Vector2(1920,1080):new Vector2(Screen.width/scale,Screen.height/scale);}
+        internal void Apply()
         {
-            var root=(RectTransform)transform;var size=root.rect.size;
-            if(size==lastSize && transform.childCount==lastCount && positions.Keys.All(k=>k!=null))return;
-            lastSize=size;lastCount=transform.childCount;
+            if(this==null)return;
             foreach(var gone in positions.Keys.Where(k=>k==null).ToArray())positions.Remove(gone);
-            var offset=new Vector2((size.x-1920f)/2f,-(size.y-1080f)/2f);
+            var size=CanvasSize();var offset=new Vector2((size.x-1920f)/2f,-(size.y-1080f)/2f);
             var top=new Vector2(0,1);
             foreach(Transform child in transform)
             {
                 var r=child as RectTransform;
                 if(r==null || r.anchorMin!=top || r.anchorMax!=top || r.pivot!=top)continue;
-                if(!positions.ContainsKey(r))positions[r]=r.anchoredPosition;
-                r.anchoredPosition=positions[r]+offset;
+                if(!positions.TryGetValue(r,out var design))positions[r]=design=r.anchoredPosition;
+                var target=design+offset;
+                if(r.anchoredPosition!=target)r.anchoredPosition=target;
             }
         }
     }

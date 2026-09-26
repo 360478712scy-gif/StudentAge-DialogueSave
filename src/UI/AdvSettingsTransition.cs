@@ -133,7 +133,7 @@ namespace StudentAgeDialogueSave.UI
         void AddPageVertex(VertexHelper mesh,Rect rect,float x,float y)
         {
             // Page regions are design coordinates inside the centered 1920x1080 area of the canvas.
-            var screen=((RectTransform)canvas.rootCanvas.transform).rect;float cw=screen.width,ch=screen.height,u,v;
+            var screen=DesignStage.CanvasSize();float cw=screen.x,ch=screen.y,u,v;
             if(FullScreen){u=x/rect.width;v=y/rect.height;}
             else{u=((cw-1920f)/2f+ScreenRegion.x+x)/cw;v=((ch-1080f)/2f+1080-ScreenRegion.y-ScreenRegion.height+y)/ch;}
             if(Picture is RenderTexture && SystemInfo.graphicsUVStartsAtTop)v=1-v;

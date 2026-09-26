@@ -21,7 +21,7 @@ internal static class RuntimeLayoutQA
         yield return new WaitForSecondsRealtime(1);
         string log="screen="+Screen.width+"x"+Screen.height+"\n";
         var frame=Resources.FindObjectsOfTypeAll<RectTransform>().First(r=>r.name=="Frame" && r.parent!=null && r.parent.name=="DialogueSave.ADV");
-        log+=Gap("dialogue",frame,check);
+        {var c=new Vector3[4];frame.GetWorldCorners(c);check(Mathf.Abs(c[0].y)<2 && Mathf.Abs(c[0].x-(Screen.width-c[2].x))<2,"dialogue frame sits on the screen bottom (bottom "+c[0].y+")");log+="dialogue bottom="+c[0].y+" top="+(Screen.height-c[1].y)+"\n";}
         yield return Shot(root,"layout-dialogue");
         UIMgr.OpenView<SettingView>(UILayerType.Tips,null,new object[]{true});
         yield return until(()=>AdvSettingsTransition.Active!=null,15,"layout settings transition starts");
@@ -39,6 +39,16 @@ internal static class RuntimeLayoutQA
         yield return new WaitForSecondsRealtime(.3f);
         yield return Shot(root,"layout-choice-hover");
         ExecuteEvents.Execute(choice.gameObject,new PointerEventData(EventSystem.current),ExecuteEvents.pointerExitHandler);
+        // Tab switches rebuild page children; every pre-render pass must already see them centered.
+        int misplaced=0,passes=0;var stage=AdvSettings.Active.GetComponent<DesignStage>();
+        var designs=(System.Collections.Generic.Dictionary<RectTransform,Vector2>)AccessTools.Field(typeof(DesignStage),"positions").GetValue(stage);
+        Canvas.WillRenderCanvases probe=()=>{passes++;var size=DesignStage.CanvasSize();var offset=new Vector2((size.x-1920f)/2f,-(size.y-1080f)/2f);
+            foreach(Transform t in stage.transform){var r=t as RectTransform;if(r==null||r.anchorMin!=new Vector2(0,1)||r.anchorMax!=new Vector2(0,1)||r.pivot!=new Vector2(0,1))continue;
+                if(!designs.TryGetValue(r,out var d)||(r.anchoredPosition-(d+offset)).sqrMagnitude>.01f)misplaced++;}};
+        Canvas.willRenderCanvases+=probe;
+        foreach(int tab in new[]{1,2,0}){AdvSettings.Active.GetComponentsInChildren<UnityEngine.UI.Button>(true).First(b=>b.name=="Settings.Tab"+tab).onClick.Invoke();yield return new WaitForSecondsRealtime(.6f);}
+        Canvas.willRenderCanvases-=probe;
+        check(passes>10 && misplaced==0,"tab switches never render an uncentered page element ("+misplaced+" misplaced in "+passes+" passes)");
         log+="startMode="+Screen.fullScreenMode+" size="+Screen.width+"x"+Screen.height+"\n";
         var view=(SettingView)AccessTools.Field(typeof(AdvSettings),"view").GetValue(AdvSettings.Active);
         var modes=(System.Collections.Generic.List<UnityEngine.UI.Dropdown.OptionData>)AccessTools.Field(typeof(SettingView),"fullscreenOptions").GetValue(view);
