@@ -236,12 +236,13 @@ namespace StudentAgeDialogueSave.UI
         {
             if(this==null || first==null)return;
             tracked.RemoveAll(g=>g==null);
-            var size=DesignStage.CanvasSize();float tall=(size.y-1080f)/2f,wide=(size.x-1920f)/2f;
-            bool show=(tall>.01f || wide>.01f) && tracked.Any(g=>g.activeInHierarchy);
+            // Only screens clearly taller than 16:9, where the game itself shows black bands.
+            // 16:9, near-16:9 (e.g. 1366x768) and wider screens never get bars from the mod.
+            var size=DesignStage.CanvasSize();float tall=(size.y-1080f)/2f;
+            bool show=tall>=1080f*.01f && tracked.Any(g=>g.activeInHierarchy);
             if(first.gameObject.activeSelf!=show){first.gameObject.SetActive(show);second.gameObject.SetActive(show);}
             if(!show)return;
-            if(tall>.01f){Place(first,new Vector2(0,1),new Vector2(1,1),new Vector2(0,tall));Place(second,new Vector2(0,0),new Vector2(1,0),new Vector2(0,tall));}
-            else{Place(first,new Vector2(0,0),new Vector2(0,1),new Vector2(wide,0));Place(second,new Vector2(1,0),new Vector2(1,1),new Vector2(wide,0));}
+            Place(first,new Vector2(0,1),new Vector2(1,1),new Vector2(0,tall));Place(second,new Vector2(0,0),new Vector2(1,0),new Vector2(0,tall));
         }
         static void Place(RectTransform r,Vector2 min,Vector2 max,Vector2 size)
         {
