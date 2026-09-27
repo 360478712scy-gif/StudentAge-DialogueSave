@@ -1,3 +1,4 @@
+using System.Linq;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -21,7 +22,7 @@ namespace StudentAgeDialogueSave
     public sealed class DialogueSavePlugin : BaseUnityPlugin
     {
         public const string Id = "local.studentage.dialoguesave";
-        public const string Version = "0.2.7";
+        public const string Version = "0.2.8";
         internal static DialogueRuntimeHost Host;
         void Awake()
         {
@@ -68,23 +69,33 @@ namespace StudentAgeDialogueSave
         float nextAutoCheck;
         string actionState;
 
+        // Routine traces (timings, toolbar state, per-line history waits, each save's commit)
+        // go to Debug, which BepInEx does not write by default. Problems stay visible.
+        static readonly string[] RoutinePrefixes = { "DialogueSave PERF ", "对话操作栏状态：", "回看等待记录 ", "对话存档本地提交完成：", "退出对话自动存档已完成", "存档的插件版本与当前不同" };
+        void Diagnose(string message)
+        {
+            if (message == null) return;
+            bool routine = RoutinePrefixes.Any(message.StartsWith) ||
+                System.Text.RegularExpressions.Regex.IsMatch(message, "^已回收被覆盖的旧对话存档 [1-9] 个");
+            if (routine) log.LogDebug(message); else log.LogInfo(message);
+        }
         internal void Initialize(ManualLogSource logger, bool auto, int interval, BepInEx.Configuration.ConfigEntry<string> uiMode)
         {
             log = logger; ownerThread = Thread.CurrentThread.ManagedThreadId;
             harmony = new Harmony(DialogueSavePlugin.Id);
-            adapter = new DialogueCheckpointAdapter(NextFrame, message => log.LogInfo(message));
+            adapter = new DialogueCheckpointAdapter(NextFrame, Diagnose);
             DialoguePresentationPolicy.Install(harmony);
             adapter.Install(harmony);
-            service = new DialogueSaveService(adapter, Post, message => log.LogInfo(message), NextFrame, shutdown.Token, auto, interval);
+            service = new DialogueSaveService(adapter, Post, Diagnose, NextFrame, shutdown.Token, auto, interval);
             ComicPresentationAdapter.Install(harmony);
             NativeFightInputFix.Install(harmony);
             NativeWindowModeFix.Install(harmony);
             DialogueUiResourceLease.Install(harmony);
-            exitSave = new DialogueExitSave(service, NextFrame, message => log.LogInfo(message), harmony);
-            ui = new DialogueUiController(service, message => log.LogInfo(message));
+            exitSave = new DialogueExitSave(service, NextFrame, Diagnose, harmony);
+            ui = new DialogueUiController(service, Diagnose);
             ui.Install(harmony);
             service.RecordsChanged += ui.RefreshRecords;
-            adv = new AdvDialogueController(adapter, ui, service, uiMode, shutdown.Token, message => log.LogInfo(message), harmony);
+            adv = new AdvDialogueController(adapter, ui, service, uiMode, shutdown.Token, Diagnose, harmony);
             StartCoroutine(WarmSettings());
             log.LogInfo("对话存档已初始化；实际可用范围由对话来源与稳定状态检查决定。");
         }
