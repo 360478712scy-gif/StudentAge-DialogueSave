@@ -45,7 +45,25 @@ namespace StudentAgeDialogueSave.GameIntegration
             if(disposed)return;disposed=true;
             foreach(string path in paths)release.Invoke(null,new object[]{path});
             paths.Clear();
-            if(--rebuilding==0 && unloadPending){unloadPending=false;ResMgr.UnloadUnusedAssets();}
+            if(--rebuilding==0 && unloadPending){unloadPending=false;ReleaseUnreferenced();}
+        }
+        // The deferred native unload ends with Resources.UnloadUnusedAssets + GC.Collect, a full
+        // scan that stalls 1-2 s with many Mods loaded. Release unreferenced resources now (the
+        // native first half); the next native view change still runs the full sweep.
+        static readonly System.Reflection.FieldInfo instance=AccessTools.Field(typeof(ResMgr),"ins"),table=AccessTools.Field(typeof(ResMgr),"resDict");
+        static void ReleaseUnreferenced()
+        {
+            var resources=instance==null || table==null ? null : table.GetValue(instance.GetValue(null)) as System.Collections.IDictionary;
+            if(resources==null){ResMgr.UnloadUnusedAssets();return;}
+            var unused=new List<object>();
+            foreach(System.Collections.DictionaryEntry entry in resources)
+            {
+                var info=entry.Value;if(info==null)continue;
+                var count=AccessTools.Field(info.GetType(),"refCount");var unload=AccessTools.Method(info.GetType(),"UnLoad");
+                if(count==null || unload==null){ResMgr.UnloadUnusedAssets();return;}
+                if((int)count.GetValue(info)<=0){unload.Invoke(info,null);unused.Add(entry.Key);}
+            }
+            foreach(var key in unused)resources.Remove(key);
         }
     }
 }

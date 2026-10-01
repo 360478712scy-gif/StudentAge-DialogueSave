@@ -22,6 +22,9 @@ else:native_slots.unlink(missing_ok=True)
 layout_flag=QA/'layout.txt'
 if '--layout' in sys.argv:layout_flag.write_text('Centered pages on a non-16:9 window')
 else:layout_flag.unlink(missing_ok=True)
+mod_sweep=QA/'mod-sweep.txt'
+if '--mod-sweep' in sys.argv:mod_sweep.write_text('Saveability across subscribed story mods')
+else:mod_sweep.unlink(missing_ok=True)
 choice_click=QA/'choice-click.txt'
 if '--choice-click' in sys.argv:choice_click.write_text('Choice click with line visible')
 else:choice_click.unlink(missing_ok=True)
@@ -149,7 +152,7 @@ import re
 cfg=QA/'BepInEx/config/local.studentage.dialoguesave.cfg'
 contents=cfg.read_text() if cfg.exists() else '[Saving]\nAutoSave = false\n'
 mode='ADV' if adv_only else 'Ask' if adv else 'Original'
-if '--choice-click' in sys.argv or '--storage-perf' in sys.argv or '--layout' in sys.argv or '--native-slots' in sys.argv or '--effects' in sys.argv or '--phone' in sys.argv or '--skip-probe' in sys.argv:mode='ADV'
+if '--mod-sweep' in sys.argv or '--choice-click' in sys.argv or '--storage-perf' in sys.argv or '--layout' in sys.argv or '--native-slots' in sys.argv or '--effects' in sys.argv or '--phone' in sys.argv or '--skip-probe' in sys.argv:mode='ADV'
 if re.search(r'^DialogueStyle\s*=.*$',contents,re.M):contents=re.sub(r'^DialogueStyle\s*=.*$', 'DialogueStyle = '+mode,contents,flags=re.M)
 else:contents+='\n[Interface]\nDialogueStyle = '+mode+'\n'
 if adv:
@@ -191,7 +194,7 @@ with (QA/'wine.log').open('w') as output:
             pid=matches[0].strip().split()[0]
             subprocess.run(['osascript','-e',f'tell application "System Events" to set frontmost of (first process whose unix id is {pid}) to true'],capture_output=True)
             print('QA_RUNNING',pid,flush=True);break
-    try:child.wait(timeout=None if preview else 600 if ('--phone' in sys.argv and '--effects' in sys.argv) or '--sisi-up' in sys.argv else 300)
+    try:child.wait(timeout=None if preview else int(os.environ['STUDENTAGE_QA_TIMEOUT']) if os.environ.get('STUDENTAGE_QA_TIMEOUT') else 600 if ('--phone' in sys.argv and '--effects' in sys.argv) or '--sisi-up' in sys.argv else 300)
     except subprocess.TimeoutExpired:
         print('QA_TIMEOUT: inspect the isolated process before continuing',flush=True);raise SystemExit(2)
 print('QA_PLAYER_EXITED',child.returncode,flush=True)

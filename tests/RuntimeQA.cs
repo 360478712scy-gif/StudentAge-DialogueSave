@@ -28,7 +28,7 @@ public sealed class DialogueQaPlugin:BaseUnityPlugin
         string root=Paths.GameRootPath;
         File.WriteAllText(Path.Combine(root,"qa-plugin-awake.txt"),root);
         if(!root.Replace('\\','/').EndsWith("/student-age-dialogue-save/qa/runtime"))throw new Exception("QA only");
-        if(File.Exists(Path.Combine(root,"sisi-up-mode.txt")))RuntimeSisiQA.Prepare(root);
+        if(File.Exists(Path.Combine(root,"sisi-up-mode.txt")) || File.Exists(Path.Combine(root,"mod-sweep.txt")))RuntimeSisiQA.Prepare(root);
         var obj=new GameObject("DialogueQA.PersistentHost");obj.hideFlags=HideFlags.HideAndDontSave;DontDestroyOnLoad(obj);
         obj.AddComponent<DialogueQaDriver>().Initialize(root,Logger);
     }
@@ -56,10 +56,17 @@ public sealed class DialogueQaDriver:MonoBehaviour
     void Update(){RuntimeControlsQA.ObserveFrame(Time.unscaledDeltaTime);}
     IEnumerator Run()
     {
-        yield return Until(()=>UIMgr.IsViewOpened<EntryView>(),90,"entry loaded");
+        yield return Until(()=>UIMgr.IsViewOpened<EntryView>(),File.Exists(Path.Combine(root,"mod-sweep.txt"))?600:90,"entry loaded");
         Check(PathDefine.SAVE_PATH.Replace('\\','/').Contains("/student-age-dialogue-save/qa/runtime/data/"),"managed save path isolated");
         Check(Application.companyName=="DlgSaveQA" && Application.productName=="DialogSave","native player identity isolated");
         if(File.Exists(Path.Combine(root,"sisi-up-mode.txt"))) RuntimeSisiQA.Validate(root,Check);
+        else if(File.Exists(Path.Combine(root,"mod-sweep.txt")))
+        {
+            var infos=BepInEx.Bootstrap.Chainloader.PluginInfos.Values.ToArray();
+            File.WriteAllLines(Path.Combine(output,"plugins.txt"),infos.Select(p=>p.Metadata.GUID+" "+p.Metadata.Version+" "+p.Location));
+            Check(infos.All(p=>Path.GetFullPath(p.Location).StartsWith(Path.Combine(root,"BepInEx","plugins"),StringComparison.OrdinalIgnoreCase)),"every loaded plugin is an isolated rewritten copy");
+            Check(File.ReadAllText(Path.Combine(root,"isolation-verified.txt")).StartsWith("All managed assemblies rescanned;"),"mod plugins included in managed write isolation scan");
+        }
         else { RuntimeCompatibilityQA.Install(root, Check);
         File.WriteAllText(Path.Combine(output,"compatibility-checks.txt"), RuntimeCompatibilityQA.RunPureSelfChecks()); }
         var host=Resources.FindObjectsOfTypeAll<DialogueRuntimeHost>().FirstOrDefault();Check(host!=null,"persistent runtime host remains after native bootstrap");
@@ -174,6 +181,7 @@ public sealed class DialogueQaDriver:MonoBehaviour
         if(File.Exists(Path.Combine(root,"effects.txt"))) {yield return RuntimeEffectsQA.Run(adapter,(DialogueSaveService)service,Check,Until,root);yield break;}
         if(File.Exists(Path.Combine(root,"native-slots.txt"))) {yield return RuntimeNativeSlotsQA.Run(Check,Until,root);yield break;}
         if(File.Exists(Path.Combine(root,"layout.txt"))) {yield return RuntimeLayoutQA.Run(Check,Until,root);yield break;}
+        if(File.Exists(Path.Combine(root,"mod-sweep.txt"))) {yield return RuntimeModSweepQA.Run(adapter,(DialogueSaveService)service,Check,Until,root);yield break;}
         if(File.Exists(Path.Combine(root,"choice-click.txt"))) {yield return RuntimeChoiceClickQA.Run(Check,Until,root);yield break;}
         if(File.Exists(Path.Combine(root,"storage-perf.txt"))) {yield return RuntimeStoragePerfQA.Run(adapter,(DialogueSaveService)service,Check,Until,root);yield break;}
         if(File.Exists(Path.Combine(root,"archive-routing.txt"))) {yield return RuntimeArchiveRoutingQA.Run(adapter,ui,(DialogueSaveService)service,Check,Until,root);yield break;}

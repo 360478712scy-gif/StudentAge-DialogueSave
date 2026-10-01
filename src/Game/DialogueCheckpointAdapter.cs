@@ -245,7 +245,8 @@ namespace StudentAgeDialogueSave.GameIntegration
             if(view.group_foreground.gameObject.activeInHierarchy) return Refuse(out reason,"前景演出尚未适配完整恢复，请在普通对白保存");
             if(view.group_item.gameObject.activeInHierarchy || view.group_msg.gameObject.activeInHierarchy)
                 return Refuse(out reason,"道具或消息演出尚未适配完整恢复，请在普通对白保存");
-            if(view.img_screen_effect.gameObject.activeInHierarchy)
+            // A settled native dark overlay (4011) is saved and restored; flashes and fades wait.
+            if(view.img_screen_effect.gameObject.activeInHierarchy && CaptureOverlay(view)==null)
                 return Refuse(out reason,"屏幕叠层仍在显示，请等待演出结束后保存");
             if(Get<object>(view,"curVFX") is ParticleSystem vfx && vfx!=null && vfx.IsAlive(true))
                 return Refuse(out reason,"粒子演出仍在播放，请等待演出结束后保存");
@@ -270,7 +271,13 @@ namespace StudentAgeDialogueSave.GameIntegration
             if (view.tmpTalks == null || view.tmpTalkIdx < 0 || view.tmpTalkIdx >= view.tmpTalks.Count ||
                 (!pausedTyping && ((TMPro.TextMeshProUGUI)Call(view,"GetTalkTxt")).text != view.tmpTalks[view.tmpTalkIdx]))
                 return Refuse(out reason, "对白仍在显示过程中");
-            if (Get<int>(view, "curBgId") <= 0 || !Cfg.BgCfgMap.ContainsKey(Get<int>(view, "curBgId")))
+            // Background 0: the line is shown over the scene behind it (home, map), as many
+            // events are authored. That is restorable when no background sprite is showing.
+            // An event opened over a map or scene may also show that scene's picture by URL
+            // (curBgId stays 0); that picture must map back to a configured background.
+            int backgroundId = Get<int>(view, "curBgId");
+            // -1 is the native "never set" value, 0 means "keep the scene"; both show no configured background.
+            if (backgroundId < -1 || (backgroundId <= 0 ? !UnlistedBackgroundRestorable(view) : !Cfg.BgCfgMap.ContainsKey(backgroundId)))
                 return Refuse(out reason, "当前背景状态尚不能完整恢复");
             try { DialogueContinuation.Capture(view); }
             catch (InvalidOperationException error) { return Refuse(out reason, error.Message); }
@@ -499,8 +506,10 @@ namespace StudentAgeDialogueSave.GameIntegration
                     }
                     return decoded;
                 });
+                var unpackClock=System.Diagnostics.Stopwatch.StartNew();
                 while(!unpack.IsCompleted){cancellationToken.ThrowIfCancellationRequested();await nextFrame();AssertThread();}
                 trail=unpack.GetAwaiter().GetResult();
+                Trace("restore.trailUnpack",unpackClock.Elapsed.TotalMilliseconds,encoded?.Length??0);
             }
             var restoreClock = System.Diagnostics.Stopwatch.StartNew();
             cancellationToken.ThrowIfCancellationRequested();
@@ -531,7 +540,9 @@ namespace StudentAgeDialogueSave.GameIntegration
                 {
                     foreach(var point in trail)
                         if(cachedConfig?.Digest==point.State.Dialogue.Value<string>("configDigest"))point.Config=cachedConfig;
+                    var importClock=System.Diagnostics.Stopwatch.StartNew();
                     RestoreHistoryTrail?.Invoke(trail);
+                    Trace("restore.trailImport",importClock.Elapsed.TotalMilliseconds,trail.Length);
                 }
             }
             catch (Exception original)
@@ -664,6 +675,8 @@ namespace StudentAgeDialogueSave.GameIntegration
                 ["background"] = Get<int>(view, "curBgId"),
                 ["cg"] = CaptureCg(view),
                 ["phone"] = CapturePhone(view),
+                ["overlay"] = CaptureOverlay(view),
+                ["backgroundSource"] = Get<int>(view, "curBgId") <= 0 ? ShownBackgroundSource(view) : null,
                 ["speakerId"] = cfg.roleIds?.FirstOrDefault() ?? 0,
                 ["choiceSummary"] = ChoiceSummary(view),
                 ["backgroundEffect"] = CaptureBackgroundEffect(view),
@@ -699,6 +712,111 @@ namespace StudentAgeDialogueSave.GameIntegration
             if(Path.IsPathRooted(url))return url;
             if(url.StartsWith("Mods"))return Singleton<ModCtrl>.Ins.GetFullUrl(url);
             return Path.Combine("Textures/",LocalizationMgr.GetLocalizeUrl(url));
+        }
+        // Native 4011 darkens the screen with shader 7 (property 1008) until a later 4011 ends it.
+        private static bool OverlayShader(out string shader, out string property)
+        {
+            shader = property = null;
+            if (!Cfg.ShaderCfgMap.TryGetValue(7, out var main) || !Cfg.ShaderCfgMap.TryGetValue(1008, out var amount)) return false;
+            shader = main.url; property = amount.name;
+            return !string.IsNullOrEmpty(shader) && !string.IsNullOrEmpty(property);
+        }
+        private static JObject CaptureOverlay(NewTalkView view)
+        {
+            var image = view.img_screen_effect;
+            if (image == null || !image.gameObject.activeInHierarchy || !OverlayShader(out string shader, out string property)) return null;
+            var material = image.material;
+            if (material == null || material.shader == null || material.shader.name != shader || !material.HasProperty(property) ||
+                DOTween.IsTweening(material) || DOTween.IsTweening(image)) return null;
+            var color = image.color;
+            return new JObject { ["value"] = material.GetFloat(property), ["color"] = new JArray(color.r, color.g, color.b, color.a) };
+        }
+        private static void RestoreOverlay(NewTalkView view, JObject overlay)
+        {
+            var image = view.img_screen_effect;
+            image.DOKill(); if (image.material != null) image.material.DOKill();
+            if (overlay == null)
+            {
+                if (image.gameObject.activeSelf) { image.gameObject.SetActive(false); image.RecycleMat(); }
+                return;
+            }
+            OverlayShader(out string shader, out string property);
+            var color = (JArray)overlay["color"];
+            image.color = new Color((float)color[0], (float)color[1], (float)color[2], (float)color[3]);
+            image.gameObject.SetActive(true);
+            var material = image.material;
+            if (material == null || material.shader == null || material.shader.name != shader) material = image.InitMat(7);
+            material.SetFloat(property, (float)overlay["value"]);
+        }
+        private static void ValidateOverlay(JObject data)
+        {
+            var token = data["overlay"];
+            if (token == null || token.Type == JTokenType.Null) return;
+            bool Finite(JToken v) => (v.Type == JTokenType.Float || v.Type == JTokenType.Integer) && !float.IsNaN((float)v) && !float.IsInfinity((float)v);
+            if (!(token is JObject overlay) || overlay.Count != 2 || overlay["value"] == null || !Finite(overlay["value"]) ||
+                (float)overlay["value"] < -1 || (float)overlay["value"] > 2 || !(overlay["color"] is JArray color) || color.Count != 4 ||
+                color.Any(v => !Finite(v) || (float)v < 0 || (float)v > 1) || !OverlayShader(out _, out _))
+                throw new InvalidDataException("屏幕叠层快照无效");
+        }
+        // Background 0: either nothing (the scene behind shows through) or a scene picture
+        // passed by URL. Only pictures that resolve to a configured background are kept.
+        private static readonly Dictionary<string, string> backgroundSources = new Dictionary<string, string>(StringComparer.Ordinal);
+        private static int backgroundSourcesFor = -1;
+        private static string ResolveTexture(string source) => Path.IsPathRooted(source) ? source :
+            source.StartsWith("Mods") ? Singleton<ModCtrl>.Ins.GetFullUrl(source) : Path.Combine("Textures/", LocalizationMgr.GetLocalizeUrl(source));
+        private static IEnumerable<string> BackgroundSources(BgCfg bg)
+        {
+            foreach (int grade in new[] { 0, 1 })
+            {
+                string source = null;
+                try { source = bg.GetBgUrl(grade); } catch (KeyNotFoundException) { }
+                if (!string.IsNullOrEmpty(source)) yield return source;
+            }
+        }
+        private static string BackgroundSourceFor(string shown)
+        {
+            if (string.IsNullOrEmpty(shown) || shown.Length > 4096) return null;
+            if (backgroundSourcesFor != Cfg.BgCfgMap.Count) { backgroundSources.Clear(); backgroundSourcesFor = Cfg.BgCfgMap.Count; }
+            if (backgroundSources.TryGetValue(shown, out string known)) return known;
+            string match = null;
+            foreach (var bg in Cfg.BgCfgMap.Values)
+            {
+                foreach (string source in BackgroundSources(bg))
+                {
+                    string resolved;
+                    try { resolved = ResolveTexture(source); } catch (Exception) { continue; }
+                    if (resolved == shown) { match = source; break; }
+                }
+                if (match != null) break;
+            }
+            return backgroundSources[shown] = match;
+        }
+        private static bool IsConfiguredBackgroundSource(string source) =>
+            !string.IsNullOrEmpty(source) && source.Length <= 4096 && Cfg.BgCfgMap.Values.Any(bg => BackgroundSources(bg).Contains(source));
+        private static string ShownBackgroundSource(NewTalkView view)
+        {
+            var sprites = Get<UISprite[]>(view, "bgs");
+            var sprite = sprites[Get<int>(view, "curBgIdx")];
+            return sprite != null && sprite.gameObject.activeSelf ? BackgroundSourceFor(sprite.url) : null;
+        }
+        private static bool UnlistedBackgroundRestorable(NewTalkView view)
+        {
+            var sprites = Get<UISprite[]>(view, "bgs");
+            var shown = sprites.Where(b => b != null && b.gameObject.activeSelf).ToArray();
+            return shown.Length == 0 || (shown.Length == 1 && shown[0] == sprites[Get<int>(view, "curBgIdx")] && BackgroundSourceFor(shown[0].url) != null);
+        }
+        private static void RestoreUnlistedBackground(NewTalkView view, int background, string source)
+        {
+            Set(view, "curBgId", background);
+            var sprites = Get<UISprite[]>(view, "bgs");
+            foreach (var other in sprites) if (other != null) other.gameObject.SetActive(false);
+            view.icon_bg_3.gameObject.SetActive(false);
+            if (string.IsNullOrEmpty(source)) return;
+            var sprite = sprites[Get<int>(view, "curBgIdx")];
+            sprite.image.color = Color.white;
+            sprite.SetTextureUrl(source);
+            sprite.gameObject.SetActive(true);
+            sprite.image.SetAlpha(1f);
         }
         private static JObject CapturePhone(NewTalkView view)
         {
@@ -806,8 +924,10 @@ namespace StudentAgeDialogueSave.GameIntegration
             // The original OnOpen is bypassed during restore. Presentation must be
             // attached before native ForceMeshUpdate can trigger a canvas render.
             PreparingPresentation?.Invoke(view);
-            Call(view, "RefreshBg", data.Value<int>("background"), 0f);
+            if (data.Value<int>("background") <= 0) RestoreUnlistedBackground(view, data.Value<int>("background"), data.Value<string>("backgroundSource"));
+            else Call(view, "RefreshBg", data.Value<int>("background"), 0f);
             RestorePhone(view, data["phone"] as JObject);
+            RestoreOverlay(view, data["overlay"] as JObject);
             ApplyBackgroundEffect(view, data["backgroundEffect"] as JObject);
             if(data["phone"] is JObject phone) Get<UISprite[]>(view,"bgs")[Get<int>(view,"curBgIdx")].image.color =
                 new Color((float)phone["backgroundColor"][0],(float)phone["backgroundColor"][1],(float)phone["backgroundColor"][2],(float)phone["backgroundColor"][3]);
@@ -1125,8 +1245,14 @@ namespace StudentAgeDialogueSave.GameIntegration
                     scale.Any(n=>float.IsNaN((float)n) || float.IsInfinity((float)n) || (float)n<.01f || (float)n>4f))
                     throw new InvalidDataException("CG 资源或播放位置无效");
             }
-            if (!Cfg.BgCfgMap.ContainsKey(data.Value<int>("background")) || string.IsNullOrEmpty(data.Value<string>("session")))
+            if (data.Value<int>("background") < -1 || (data.Value<int>("background") > 0 && !Cfg.BgCfgMap.ContainsKey(data.Value<int>("background"))) ||
+                string.IsNullOrEmpty(data.Value<string>("session")))
                 throw new InvalidDataException("对话背景或会话标识缺失");
+            ValidateOverlay(data);
+            var source = data["backgroundSource"];
+            if (source != null && source.Type != JTokenType.Null &&
+                (data.Value<int>("background") > 0 || source.Type != JTokenType.String || !IsConfiguredBackgroundSource((string)source)))
+                throw new InvalidDataException("对话背景图片无效");
             if (!(data["history"] is JArray history) || history.Count > 10000) throw new InvalidDataException("对话历史无效");
             data["history"].ToObject<List<TalkData>>(DataJson);
             data["roleCloths"].ToObject<Dictionary<int, int>>(DataJson);

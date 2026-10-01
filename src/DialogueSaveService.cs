@@ -440,6 +440,7 @@ namespace StudentAgeDialogueSave
                 try
                 {
                     await prior;
+                    var loadClock = System.Diagnostics.Stopwatch.StartNew();
                     shutdown.ThrowIfCancellationRequested();
                     while (adapter.IsRestoring) { shutdown.ThrowIfCancellationRequested(); await nextFrame(); }
                     if (adapter.IsDialogueContext) readingPause = adapter.PauseForMenu();
@@ -449,6 +450,7 @@ namespace StudentAgeDialogueSave
                     while (captureRequests > 0)
                     { shutdown.ThrowIfCancellationRequested(); await nextFrame(); }
                     await WaitForStoreAsync(shutdown);
+                    SafeLog("DialogueSave PERF load.waitStore=" + loadClock.ElapsedMilliseconds + "ms"); loadClock.Restart();
                     shutdown.ThrowIfCancellationRequested();
                     StatusMessage = null;
                     busy = true; ownsStore = true;
@@ -456,12 +458,14 @@ namespace StudentAgeDialogueSave
                     var read = Task.Run(() => repo.Load(revisionId), shutdown);
                     while (!read.IsCompleted) { shutdown.ThrowIfCancellationRequested(); await nextFrame(); }
                     var envelope = read.GetAwaiter().GetResult();
+                    SafeLog("DialogueSave PERF load.read=" + loadClock.ElapsedMilliseconds + "ms bytes=" + envelope.World.Length); loadClock.Restart();
                     if (envelope.Header.SteamId != Platform.Current.GetUserId()) throw new InvalidOperationException("此对话存档属于其他 Steam 用户。");
                     var h = envelope.Header;
                     var checkpoint = new GameCheckpoint { WorldBytes = envelope.World, Dialogue = envelope.Dialogue,
                         Brief = new CheckpointBrief { SteamId = h.SteamId, RunId = h.RunId, GameVersion = h.GameVersion,
                             Speaker = h.Speaker, Summary = h.Summary, RoleName = h.RoleName } };
                     await adapter.RestoreAsync(checkpoint, shutdown);
+                    SafeLog("DialogueSave PERF load.restore=" + loadClock.ElapsedMilliseconds + "ms");
                     EndMenu();
                     lastAutoKey = null; nextAutoTime = Time.realtimeSinceStartup + autoInterval;
                     result = new UiResult(true, "已回到保存的对话。");
