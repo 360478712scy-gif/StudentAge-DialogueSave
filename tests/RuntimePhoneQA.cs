@@ -8,6 +8,8 @@ using Config;
 using Sdk;
 using UnityEngine;
 using View.Evt;
+using StudentAgeDialogueSave;
+using StudentAgeDialogueSave.Storage;
 using StudentAgeDialogueSave.GameIntegration;
 using StudentAgeDialogueSave.UI;
 
@@ -52,6 +54,15 @@ internal static class RuntimePhoneQA
             yield return new WaitForSecondsRealtime(1f);
             log.Add("in call at "+current()+": phone="+phone());
             check(phone(),"fixture is inside a phone call");
+            if(File.Exists(Path.Combine(root,"phone-baseline.txt")))
+            {
+                bool allowed=adapter.CanCapture(out string reason);
+                check(!allowed && reason.Contains("特殊演出"),"0.2.8 reproduces permanent phone save refusal: "+reason);
+                File.WriteAllText(Path.Combine(root,"results/phone-baseline.txt"),reason);
+                yield break;
+            }
+            yield return Roundtrip(adapter,check,until,root,talk,current,phone,hiddenRoles);
+
             AccessTools.Method(typeof(AdvDialogueController),"BeginSceneSkip").Invoke(adv,null);
             for(int wait=0;wait<60 && !(talk()!=null && current()==1900000306 && talk().talkState==TalkState.Option);wait++)
             {
@@ -75,4 +86,48 @@ internal static class RuntimePhoneQA
         }
         finally{adv.Preferences.SkipUnread.Value=unread;File.WriteAllLines(Path.Combine(root,"results/phone.txt"),log);}
     }
+    static IEnumerator Roundtrip(DialogueCheckpointAdapter adapter,Action<bool,string> check,Func<Func<bool>,float,string,IEnumerator> until,string root,
+        Func<NewTalkView> talk,Func<int> current,Func<bool> phone,Func<int> hiddenRoles)
+    {
+        var host=UnityEngine.Resources.FindObjectsOfTypeAll<DialogueRuntimeHost>().First();
+        var service=(DialogueSaveService)AccessTools.Field(typeof(DialogueRuntimeHost),"service").GetValue(host);
+        var confirm=ConfirmationOptions.Entry(AdvDialogueController.Active.Configuration,"QuickSave");bool old=confirm.Value;confirm.Value=false;
+        var phoneImage=talk().icon_bg_3;string url=phoneImage.url;int origin=phoneImage.image.fillOrigin;
+        var temp=((List<int>)AccessTools.Field(typeof(NewTalkView),"tmpRoleIds").GetValue(talk())).ToArray();
+        try
+        {
+            yield return until(()=>adapter.CanCapture(out _),8,"phone capture preflight stable");
+            var originalView=talk();var invalid=adapter.Capture();invalid.Dialogue["phone"]["background"]=int.MaxValue;
+            var rejected=adapter.RestoreAsync(invalid);yield return until(()=>rejected.IsCompleted,15,"missing phone background preflight completes");
+            check(rejected.IsFaulted && talk()==originalView && phone(),"missing phone background rejected before current world is discarded");var observed=rejected.Exception;
+            invalid=adapter.Capture();invalid.Dialogue["phone"]["participants"]=new Newtonsoft.Json.Linq.JArray(int.MaxValue);
+            rejected=adapter.RestoreAsync(invalid);yield return until(()=>rejected.IsCompleted,15,"missing phone participant preflight completes");
+            check(rejected.IsFaulted && talk()==originalView && phone(),"missing phone participant rejected before current world is discarded");observed=rejected.Exception;
+            for(int repeat=0;repeat<2;repeat++)
+            {
+                yield return until(()=>adapter.CanCapture(out _),8,"phone becomes saveable");
+                var before=service.List(DialogueUiCategory.Quick).Select(r=>r.RevisionId).ToArray();
+                service.QuickSave();service.QuickSave();
+                yield return until(()=>service.List(DialogueUiCategory.Quick).Any(r=>!before.Contains(r.RevisionId)),30,"phone quick save commits");
+                var added=service.List(DialogueUiCategory.Quick).Where(r=>!before.Contains(r.RevisionId)).ToArray();
+                check(added.Length==1,"repeated quick-save request commits exactly once");
+                talk().OnClickNext();yield return until(()=>current()==1900000304 && !phone(),20,"call hangs up before load");
+                UiResult result=null;service.Load(added[0].RevisionId,r=>{if(!r.IsPending)result=r;});
+                yield return until(()=>result!=null,60,"phone save loads");check(result.Success,"phone load succeeds: "+result.Message);
+                yield return until(()=>current()==1900000303 && phone() && talk().icon_bg_3.image.sprite!=null,20,"phone restored at saved line");
+                check(talk().icon_bg_3.url==url && talk().icon_bg_3.image.fillOrigin==origin && Mathf.Abs(talk().icon_bg_3.image.fillAmount-.5f)<.001f,"phone background and split geometry restored");
+                check(temp.SequenceEqual((List<int>)AccessTools.Field(typeof(NewTalkView),"tmpRoleIds").GetValue(talk())),"temporary phone participants restored for native hangup cleanup");
+                yield return new WaitForSecondsRealtime(1f);
+                var adv=AdvDialogueController.Active;
+                var canvas=(GameObject)AccessTools.Field(typeof(AdvDialogueController),"canvas").GetValue(adv);
+                var shown=(TMPro.TextMeshProUGUI)AccessTools.Field(typeof(AdvDialogueController),"shownText").GetValue(adv);
+                File.AppendAllText(Path.Combine(root,"results/phone-visibility.txt"),"canvas="+canvas?.activeSelf+" top="+UIMgr.GetTopView(ViewType.Guide,ViewType.Side)?.GetType().Name+
+                    " transition="+AccessTools.Property(typeof(AdvDialogueController),"Transition").GetValue(adv)+" text="+shown?.gameObject.activeInHierarchy+"\n");
+                check(canvas.activeInHierarchy && shown.gameObject.activeInHierarchy,"restored phone dialogue remains visible and operable");
+                yield return new WaitForEndOfFrame();ScreenCapture.CaptureScreenshot(Path.Combine(root,"results/phone-restored-"+repeat+".png"));yield return new WaitForSecondsRealtime(.5f);
+            }
+        }
+        finally{confirm.Value=old;}
+    }
+
 }

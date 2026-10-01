@@ -22,7 +22,9 @@ clone(GAME/'BepInEx/core',QA/'BepInEx/core')
 # Never leave a previous isolation proof valid while native assemblies are staged.
 (QA/'isolation-verified.txt').unlink(missing_ok=True)
 # Always start from untouched code before rewriting (data assets are cloned just once).
-for src in (GAME/'StudentAge_Data/Managed').glob('*.dll'):shutil.copy2(src,QA/'StudentAge_Data/Managed'/src.name)
+for src in (GAME/'StudentAge_Data/Managed').glob('*.dll'):
+    if src.name.endswith(' 2.dll') and src.with_name(src.name.replace(' 2.dll','.dll')).exists(): continue
+    shutil.copy2(src,QA/'StudentAge_Data/Managed'/src.name)
 shutil.copy2(ROOT/'dist/StudentAgeDialogueSave/BepInEx/plugins/StudentAgeDialogueSave/StudentAgeDialogueSave.dll',QA/'BepInEx/plugins/StudentAgeDialogueSave.dll')
 dotnet=shutil.which('dotnet') or '/usr/local/share/dotnet/dotnet'
 sdk=subprocess.check_output([dotnet,'--list-sdks'],text=True).strip().splitlines()[-1]
@@ -34,7 +36,7 @@ def compile(source,out,extra=[]):
     if result.returncode:raise SystemExit(result.returncode)
 compile(ROOT/'tests/QaIsolation.cs',QA/'StudentAge_Data/Managed/QaIsolation.dll')
 if (ROOT/'tests/RuntimeQA.cs').exists():compile(sorted((ROOT/'tests').glob('Runtime*QA.cs')),QA/'BepInEx/plugins/DialogueRuntimeQA.dll',[ROOT/'dist/StudentAgeDialogueSave/BepInEx/plugins/StudentAgeDialogueSave/StudentAgeDialogueSave.dll'])
-subprocess.run([dotnet,'run','--project',str(ROOT/'tools/QaRewrite/QaRewrite.csproj'),'-p:GameDir='+str(GAME),'--',str(QA)],check=True)
+subprocess.run([dotnet,'run','--no-restore','-p:NuGetAudit=false','--project',str(ROOT/'tools/QaRewrite/QaRewrite.csproj'),'-p:GameDir='+str(GAME),'--',str(QA)],check=True)
 qa_python=os.environ.get('STUDENTAGE_QA_PYTHON') or (str(ROOT/'qa/tool-env/bin/python') if (ROOT/'qa/tool-env/bin/python').exists() else sys.executable)
 subprocess.run([qa_python,str(ROOT/'tools/rename_qa_player.py')],check=True)
 manifest={str(p.relative_to(GAME)):hashlib.sha256(p.read_bytes()).hexdigest() for p in (GAME/'StudentAge_Data/Managed').glob('Assembly-CSharp*.dll')}

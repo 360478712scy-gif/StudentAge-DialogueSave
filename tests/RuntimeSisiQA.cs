@@ -12,6 +12,7 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 using View.Evt;
+using StudentAgeDialogueSave;
 using StudentAgeDialogueSave.UI;
 using StudentAgeDialogueSave.GameIntegration;
 
@@ -60,6 +61,10 @@ public static class RuntimeSisiQA
     public static IEnumerator Run(DialogueCheckpointAdapter adapter,Action<bool,string> check,Func<Func<bool>,float,string,IEnumerator> until,string root)
     {
         AdvDialogueController.Active.SelectMode("ADV");
+        var host=Resources.FindObjectsOfTypeAll<DialogueRuntimeHost>().First();
+        var service=(DialogueSaveService)AccessTools.Field(typeof(DialogueRuntimeHost),"service").GetValue(host);
+        var confirmation=ConfirmationOptions.Entry(AdvDialogueController.Active.Configuration,"QuickSave");confirmation.Value=false;
+        var roundtrips=new HashSet<int>{1277069001,1277069074,1277069096};
         // Enter the author's event through native ShowEvent; fixture bypasses calendar/friendship prerequisites only.
         var targets=new HashSet<int>{1277067008,1277067063,1277069009,1277069031,1277069074,1277069096,1277069110};
         var visited=new HashSet<int>();var trace=new List<string>();var saveProbe=new HashSet<int>();var saveLog=new List<string>();
@@ -100,6 +105,41 @@ public static class RuntimeSisiQA
                     saveLog.Add(cfg.id+" | "+(can?"OK":why)+" | effects="+string.Join(",",cfg.screenEffect??new List<float>())+" bg="+cfg.bg+detail);
                     File.WriteAllLines(Path.Combine(root,"results/sisi-save-probe.txt"),saveLog);
                 }
+                if(talk.talkState==TalkState.AnimEnd && roundtrips.Remove(cfg.id))
+                {
+                    yield return until(()=>adapter.CanCapture(out _),10,"authored Mod line saveable "+cfg.id);
+                    if(cfg.id==1277069001)
+                    {
+                        var audio=(Newtonsoft.Json.Linq.JObject)adapter.Capture().Dialogue["audio"];
+                        check(audio.Value<float>("volume")==20f,"real authored music volume scale 20 captured without normalization");
+                        foreach(float bad in new[]{-1f,float.NaN,float.PositiveInfinity})
+                        {
+                            var invalid=(Newtonsoft.Json.Linq.JObject)audio.DeepClone();invalid["volume"]=bad;
+                            bool rejected=false;try{DialogueAudioAdapter.Validate(invalid);}catch(InvalidDataException){rejected=true;}
+                            check(rejected,"invalid audio scale still rejected: "+bad);
+                        }
+                        var oldPath=Path.Combine(root,"audio-volume-legacy.dsav");var oldBytes=File.ReadAllBytes(oldPath);
+                        var old=StudentAgeDialogueSave.Storage.SaveCodec.Decode(StudentAgeDialogueSave.Storage.SaveCodec.Read(oldBytes));
+                        var loadOld=adapter.RestoreAsync(new GameCheckpoint{WorldBytes=old.World,Dialogue=old.Dialogue,Brief=new CheckpointBrief{SteamId=old.Header.SteamId,RunId=old.Header.RunId,GameVersion=old.Header.GameVersion}});
+                        yield return until(()=>loadOld.IsCompleted,60,"previously failed real Mod snapshot loads without editing");loadOld.GetAwaiter().GetResult();
+                        check(Enumerable.SequenceEqual(oldBytes,File.ReadAllBytes(oldPath)),"previously failed Mod file remains byte-for-byte unchanged");
+                        talk=UIMgr.GetView<NewTalkView>(false) as NewTalkView;
+                        yield return until(()=>adapter.CanCapture(out _),15,"old author snapshot stable");
+                        check(((Newtonsoft.Json.Linq.JObject)adapter.Capture().Dialogue["audio"]).Value<float>("volume")==20f,"old Mod native music scale preserved on actual restore");
+                    }
+                    var before=service.List(DialogueUiCategory.Quick).Select(r=>r.RevisionId).ToArray();
+                    int effectStage=(int)AccessTools.Field(typeof(NewTalkView),"lastEffectCfgId").GetValue(talk);
+                    service.QuickSave();
+                    yield return until(()=>service.List(DialogueUiCategory.Quick).Any(r=>!before.Contains(r.RevisionId)),40,"authored Mod save commits "+cfg.id);
+                    string revision=service.List(DialogueUiCategory.Quick).First(r=>!before.Contains(r.RevisionId)).RevisionId;
+                    UiResult result=null;service.Load(revision,r=>{if(!r.IsPending)result=r;});
+                    yield return until(()=>result!=null,60,"authored Mod disk save loads "+cfg.id);
+                    check(result.Success,"real author Mod disk roundtrip succeeds "+cfg.id+": "+result.Message);
+                    talk=UIMgr.GetView<NewTalkView>(false) as NewTalkView;
+                    check(Current(talk).id==cfg.id && (int)AccessTools.Field(typeof(NewTalkView),"lastEffectCfgId").GetValue(talk)==effectStage,"authored line and committed effect stage preserved "+cfg.id);
+                    yield return new WaitForSecondsRealtime(.5f);
+                    yield return new WaitForEndOfFrame();ScreenCapture.CaptureScreenshot(Path.Combine(root,"results/sisi-restored-"+cfg.id+".png"));yield return null;
+                }
                 if(talk.talkState==TalkState.AnimEnd && targets.Remove(cfg.id))
                 {
                     yield return new WaitForSecondsRealtime(.7f);
@@ -122,6 +162,7 @@ public static class RuntimeSisiQA
             check(ended,"author event plays to natural end "+eventId);
             yield return new WaitForSecondsRealtime(.4f);
         }
+        check(roundtrips.Count==0,"all three author ordinary/CG disk roundtrips exercised");
         check((visited.Contains(1277067063)||File.Exists(Path.Combine(root,"sisi-after-funeral.txt")))&&visited.Contains(1277069074)&&visited.Contains(1277069096),"funeral crying and post-funeral CG reached through authored line chain");
         File.WriteAllText(Path.Combine(root,"results/sisi-complete.txt"),"AUTHOR_EVENTS_WITH_UP_COMPLETED; lines="+visited.Count);
     }

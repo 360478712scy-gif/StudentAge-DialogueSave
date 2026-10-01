@@ -22,6 +22,9 @@ else:native_slots.unlink(missing_ok=True)
 layout_flag=QA/'layout.txt'
 if '--layout' in sys.argv:layout_flag.write_text('Centered pages on a non-16:9 window')
 else:layout_flag.unlink(missing_ok=True)
+choice_click=QA/'choice-click.txt'
+if '--choice-click' in sys.argv:choice_click.write_text('Choice click with line visible')
+else:choice_click.unlink(missing_ok=True)
 storage_perf=QA/'storage-perf.txt'
 if '--storage-perf' in sys.argv:storage_perf.write_text('Real-size dialogue save/load timing on seeded copies')
 else:storage_perf.unlink(missing_ok=True)
@@ -146,7 +149,7 @@ import re
 cfg=QA/'BepInEx/config/local.studentage.dialoguesave.cfg'
 contents=cfg.read_text() if cfg.exists() else '[Saving]\nAutoSave = false\n'
 mode='ADV' if adv_only else 'Ask' if adv else 'Original'
-if '--storage-perf' in sys.argv or '--layout' in sys.argv or '--native-slots' in sys.argv or '--effects' in sys.argv or '--phone' in sys.argv or '--skip-probe' in sys.argv:mode='ADV'
+if '--choice-click' in sys.argv or '--storage-perf' in sys.argv or '--layout' in sys.argv or '--native-slots' in sys.argv or '--effects' in sys.argv or '--phone' in sys.argv or '--skip-probe' in sys.argv:mode='ADV'
 if re.search(r'^DialogueStyle\s*=.*$',contents,re.M):contents=re.sub(r'^DialogueStyle\s*=.*$', 'DialogueStyle = '+mode,contents,flags=re.M)
 else:contents+='\n[Interface]\nDialogueStyle = '+mode+'\n'
 if adv:
@@ -171,7 +174,7 @@ else:preview_flag.unlink(missing_ok=True)
 if (QA/'results').exists():(QA/'results').rename(QA/('results-'+datetime.datetime.now().strftime('%H%M%S')))
 exe='Z:'+str(QA/'StudentAge.exe').replace('/','\\')
 log='Z:'+str(QA/'player.log').replace('/','\\')
-env=dict(os.environ,SteamAppId='1991040',SteamGameId='1991040')
+env=dict(os.environ,SteamAppId='1991040',SteamGameId='1991040',WINEDLLOVERRIDES='winhttp=n,b',DOORSTOP_ENABLE='TRUE')
 wine=os.environ.get('STUDENTAGE_CROSSOVER_WINE')
 if not wine:
     candidates=[p/'Contents/SharedSupport/CrossOver/bin/wine' for directory in [Path.home()/'Applications',Path('/Applications')] for p in directory.glob('*CrossOver*.app')]
@@ -188,7 +191,7 @@ with (QA/'wine.log').open('w') as output:
             pid=matches[0].strip().split()[0]
             subprocess.run(['osascript','-e',f'tell application "System Events" to set frontmost of (first process whose unix id is {pid}) to true'],capture_output=True)
             print('QA_RUNNING',pid,flush=True);break
-    try:child.wait(timeout=None if preview else 300)
+    try:child.wait(timeout=None if preview else 600 if ('--phone' in sys.argv and '--effects' in sys.argv) or '--sisi-up' in sys.argv else 300)
     except subprocess.TimeoutExpired:
         print('QA_TIMEOUT: inspect the isolated process before continuing',flush=True);raise SystemExit(2)
 print('QA_PLAYER_EXITED',child.returncode,flush=True)

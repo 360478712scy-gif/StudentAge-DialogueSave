@@ -15,33 +15,88 @@ using StudentAgeDialogueSave.UI;
 // Lines with native one-shot screen effects save and load; a line and its choices form one backlog entry.
 internal static class RuntimeEffectsQA
 {
+    static string ReadLog(string path)
+    {
+        using(var stream=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.ReadWrite))
+        using(var reader=new StreamReader(stream))return reader.ReadToEnd();
+    }
     public static IEnumerator Run(DialogueCheckpointAdapter adapter,DialogueSaveService service,Action<bool,string> check,Func<Func<bool>,float,string,IEnumerator> until,string root)
     {
         var baseTalk=Cfg.TalkCfgMap[1900000001];
-        var chain=new[]{(1900000201,new List<float>{4012f,1f},"闪屏演出后的对白。"),(1900000202,new List<float>{4017f},"收起画面后的对白。"),(1900000203,new List<float>{4005f,1f},"姿势演出后的对白。")};
+        var chain=new[]{(1900000200,new List<float>{0f},"无屏幕演出指令的模组对白。"),(1900000205,new List<float>{4002f},"背景模糊后的对白。"),(1900000206,new List<float>{4003f},"背景复原后的对白。"),(1900000207,new List<float>{4009f},"棕褐色背景对白。"),(1900000208,new List<float>{4010f},"负片背景对白。"),(1900000201,new List<float>{4012f,1f},"闪屏演出后的对白。"),(1900000202,new List<float>{4017f},"收起画面后的对白。"),(1900000203,new List<float>{4005f,1f},"姿势演出后的对白。")};
         for(int i=0;i<chain.Length;i++)
             Cfg.TalkCfgMap[chain[i].Item1]=new TalkCfg{id=chain[i].Item1,bg=baseTalk.bg,roleIds=baseTalk.roleIds,roleName=baseTalk.roleName,content=chain[i].Item3,screenEffect=chain[i].Item2,
                 nextTalk=new List<int>{i+1<chain.Length?chain[i+1].Item1:1900000204}};
         Cfg.TalkCfgMap[1900000204]=new TalkCfg{id=1900000204,bg=baseTalk.bg,roleIds=baseTalk.roleIds,roleName=baseTalk.roleName,content="要慎重对待这份感情。（你只能拥有一个恋人，请谨慎选择）",option=new List<int>{1900000001,1900000002}};
-        baseTalk.nextTalk=new List<int>{1900000201};
+        baseTalk.nextTalk=new List<int>{chain[0].Item1};
         var quickConfirm=ConfirmationOptions.Entry(AdvDialogueController.Active.Configuration,"QuickSave");bool previous=quickConfirm.Value;quickConfirm.Value=false;
         var log=new List<string>();string lastSave=null;
         Func<NewTalkView> talk=()=>UIMgr.GetView<NewTalkView>(false) as NewTalkView;
         Func<int> current=()=>talk()==null?0:((TalkCfg)AccessTools.Field(typeof(NewTalkView),"cfg").GetValue(talk())).id;
         try
         {
+            yield return until(()=>adapter.CanCapture(out _),15,"initial ordinary line stable");
+            var legacyBase=Path.Combine(root,"legacy-0.2.8");
+            if(File.Exists(Path.Combine(root,"effects-baseline.txt")))
+            {
+                var legacy=adapter.Capture();
+                File.WriteAllBytes(legacyBase+".world",legacy.WorldBytes);File.WriteAllText(legacyBase+".json",legacy.Dialogue.ToString());
+                var continuation=(Newtonsoft.Json.Linq.JObject)legacy.Dialogue["continuation"].DeepClone();continuation["mvid"]=Guid.Empty.ToString("D");
+                bool refused=false;try{DialogueContinuation.Validate(continuation);}catch(InvalidDataException){refused=true;}
+                check(refused,"0.2.8 rejects intact scene-only continuation solely for a different module ID");
+            }
+            else
+            {
+                check(File.Exists(legacyBase+".world") && File.Exists(legacyBase+".json"),"real 0.2.8 isolated snapshot fixture exists");
+                var oldBytes=File.ReadAllBytes(legacyBase+".world");var oldJson=File.ReadAllText(legacyBase+".json");
+                var legacy=new GameCheckpoint{WorldBytes=oldBytes,Dialogue=Newtonsoft.Json.Linq.JObject.Parse(oldJson)};
+                var restoreLegacy=adapter.RestoreAsync(legacy);yield return until(()=>restoreLegacy.IsCompleted,40,"real 0.2.8 snapshot restores");restoreLegacy.GetAwaiter().GetResult();
+                check(Enumerable.SequenceEqual(oldBytes,File.ReadAllBytes(legacyBase+".world")) && oldJson==File.ReadAllText(legacyBase+".json"),"real old snapshot stays byte-for-byte unchanged");
+                legacy.Dialogue["continuation"]["mvid"]=Guid.Empty.ToString("D");
+                var crossBuild=adapter.RestoreAsync(legacy);yield return until(()=>crossBuild.IsCompleted,40,"scene-only snapshot with changed module ID restores");crossBuild.GetAwaiter().GetResult();
+                check(true,"actual required scene data permits changed module ID");
+                var malformed=(Newtonsoft.Json.Linq.JObject)legacy.Dialogue["continuation"].DeepClone();malformed["views"][0]["kind"]="unknown";
+                bool rejected=false;try{DialogueContinuation.Validate(malformed);}catch(InvalidDataException){rejected=true;}
+                check(rejected,"changed module compatibility still rejects unknown scene kind");
+                yield return until(()=>adapter.CanCapture(out _),15,"ordinary line stable after old restore");
+                var live=talk();var cfg=(TalkCfg)AccessTools.Field(typeof(NewTalkView),"cfg").GetValue(live);var effect=cfg.screenEffect;
+                cfg.screenEffect=new List<float>{99999f};
+                var failure=adapter.CaptureAsync();yield return until(()=>failure.IsCompleted,25,"unsupported Mod command completes bounded failure");
+                check(failure.IsFaulted && talk()==live && current()==cfg.id,"unsupported Mod command fails without replacing dialogue or advancing");var observed=failure.Exception;
+                cfg.screenEffect=effect;
+                yield return until(()=>ReadLog(Path.Combine(root,"BepInEx/LogOutput.log")).Contains("command=99999"),5,"failure log flushed");
+                string logs=ReadLog(Path.Combine(root,"BepInEx/LogOutput.log"));
+                var failureLogs=logs.Split('\n').Where(x=>x.Contains("DialogueSave CAPTURE_FAILURE") && x.Contains("command=99999")).ToArray();
+                check(failureLogs.Length>=1 && failureLogs.All(x=>!x.Contains(cfg.content)),"capture failure logs IDs and reason without dialogue content");
+                var report=AccessTools.Method(typeof(DialogueCheckpointAdapter),"ReportCaptureFailure");
+                report.Invoke(adapter,new object[]{"qa-throttle","synthetic failure"});report.Invoke(adapter,new object[]{"qa-throttle","synthetic failure"});
+                yield return until(()=>ReadLog(Path.Combine(root,"BepInEx/LogOutput.log")).Contains("CAPTURE_FAILURE stage=qa-throttle"),5,"throttle log flushed");
+                logs=ReadLog(Path.Combine(root,"BepInEx/LogOutput.log"));
+                check(logs.Split('\n').Count(x=>x.Contains("CAPTURE_FAILURE stage=qa-throttle"))==1,"duplicate failure diagnosis is throttled");
+            }
             foreach(var line in chain)
             {
                 yield return until(()=>talk()!=null && (talk().talkState==TalkState.AnimEnd),20,"line before "+line.Item1+" stable");
                 talk().OnClickNext();
                 yield return until(()=>current()==line.Item1 && talk().talkState==TalkState.AnimEnd,20,"effect line "+line.Item1+" shown");
                 string why=null;
+                if(File.Exists(Path.Combine(root,"effects-baseline.txt")))
+                {
+                    check(!adapter.CanCapture(out why) && why.Contains("未完成适配"),"0.2.8 reproduces no-op [0] save refusal: "+why);
+                    File.WriteAllText(Path.Combine(root,"results/effects-baseline.txt"),why);yield break;
+                }
                 yield return until(()=>adapter.CanCapture(out why),8,"effect line "+line.Item1+" becomes saveable");
                 var before=service.List(DialogueUiCategory.Quick).Select(r=>r.RevisionId).ToArray();
                 service.QuickSave();
                 yield return until(()=>service.List(DialogueUiCategory.Quick).Any(r=>!before.Contains(r.RevisionId)),30,"effect line "+line.Item1+" quick save commits");
                 lastSave=service.List(DialogueUiCategory.Quick).First(r=>!before.Contains(r.RevisionId)).RevisionId;
                 log.Add(line.Item1+" effect="+line.Item2[0]+" saved "+lastSave);
+                var snapshot=adapter.Capture();
+                UiResult roundtrip=null;service.Load(lastSave,r=>{if(!r.IsPending)roundtrip=r;});
+                yield return until(()=>roundtrip!=null,60,"effect "+line.Item2[0]+" loads");
+                check(roundtrip.Success,"effect "+line.Item2[0]+" disk roundtrip succeeds");
+                yield return until(()=>current()==line.Item1 && adapter.CanCapture(out _),20,"restored effect line stable");
+                check(Newtonsoft.Json.Linq.JToken.DeepEquals(snapshot.Dialogue["backgroundEffect"],adapter.Capture().Dialogue["backgroundEffect"]),"effect "+line.Item2[0]+" background state restored exactly");
                 yield return new WaitForSecondsRealtime(.5f);
             }
             UiResult loaded=null;service.Load(lastSave,r=>{if(!r.IsPending)loaded=r;});

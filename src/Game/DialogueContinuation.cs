@@ -188,8 +188,11 @@ namespace StudentAgeDialogueSave.GameIntegration
         public static void Validate(JObject value)
         {
             Shape(value, "format", "mvid", "views", "callback");
-            if (Integer(value["format"]) != 1 || (string)value["mvid"] != GameAssembly.ManifestModule.ModuleVersionId.ToString("D"))
-                throw new InvalidDataException("此剧情返回流程需要保存时的游戏版本。");
+            // The module ID is diagnostic for scene-only continuations. Required view
+            // configs and any callback method/closure still undergo their actual checks.
+            if (Integer(value["format"]) != 1 || value["mvid"]?.Type!=JTokenType.String ||
+                !Guid.TryParse((string)value["mvid"],out _))
+                throw new InvalidDataException("剧情返回流程格式或模块标识无效。");
             var views = value["views"] as JArray;
             if (views == null || views.Count < 1 || views.Count > 4) throw new InvalidDataException("缺少可恢复的原场景。");
             int prior = -1;

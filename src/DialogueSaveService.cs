@@ -304,7 +304,7 @@ namespace StudentAgeDialogueSave
                 result = await PublishAsync(snapshot, category, slot, replacement, true);
             }
             catch (OperationCanceledException) { result = new UiResult(false, "保存请求已取消。"); }
-            catch (Exception ex) { result = new UiResult(false, "保存未完成：" + ex.Message); }
+            catch (Exception ex) { adapter.ReportCaptureFailure("save",ex.GetType().Name+": "+ex.Message); result = new UiResult(false, "保存未完成：" + ex.Message); }
             if (disposed) return;
             if (!pendingSaves.TryGetValue(key, out var callbacks)) return;
             pendingSaves.Remove(key);
@@ -595,10 +595,21 @@ namespace StudentAgeDialogueSave
             SafeLog("退出对话自动存档已完成。");
         }
 
+        string autoBlockedKey;
+        float autoBlockedSince,autoBlockedReported;
         public void TickAutoSave()
         {
             if (!autoEnabled || disposed || pendingLoads.Count > 0 || quickLoadRequested || busy || quickSaveRequested || autoSaveRequested || captureRequests > 0 || menuOpen || Time.realtimeSinceStartup < nextAutoTime) return;
-            if (!adapter.CanCapture(out _)) return;
+            if (!adapter.CanCapture(out string blocked))
+            {
+                string key=adapter.CurrentCheckpointBrief?.StableNodeKey+":"+blocked;
+                if(key!=autoBlockedKey){autoBlockedKey=key;autoBlockedSince=Time.realtimeSinceStartup;autoBlockedReported=0;}
+                if(adapter.IsDialogueContext && Time.realtimeSinceStartup-autoBlockedSince>=10f &&
+                    (autoBlockedReported==0 || Time.realtimeSinceStartup-autoBlockedReported>=60f))
+                {adapter.ReportCaptureFailure("auto-blocked",blocked);autoBlockedReported=Time.realtimeSinceStartup;}
+                return;
+            }
+            autoBlockedKey=null;
             if (!EnsureRepository(out _)) return;
             if (!initialized || IsListing) { Refresh(); return; }
             var brief = adapter.CurrentCheckpointBrief;

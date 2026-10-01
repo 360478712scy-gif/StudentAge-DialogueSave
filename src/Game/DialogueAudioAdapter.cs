@@ -80,7 +80,9 @@ namespace StudentAgeDialogueSave.GameIntegration
                 throw new System.IO.InvalidDataException("背景音乐资源标识无效");
             float time = data.Value<float>("seconds"), volume = data.Value<float>("volume");
             if (float.IsNaN(time) || float.IsInfinity(time) || time < 0 || time > 24 * 60 * 60 ||
-                float.IsNaN(volume) || float.IsInfinity(volume) || volume < 0 || volume > 10)
+                // Native AudioCfg.volumn is an unbounded positive scale (Mods use 20).
+                // Preserve it; AudioSource applies its own output limits.
+                float.IsNaN(volume) || float.IsInfinity(volume) || volume < 0)
                 throw new System.IO.InvalidDataException("背景音乐进度或音量无效");
             string kind = data.Value<string>("continuation");
             if (kind != "none" && kind != "default" && kind != "group") throw new System.IO.InvalidDataException("未知背景音乐继续方式");

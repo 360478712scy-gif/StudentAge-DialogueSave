@@ -22,9 +22,11 @@ using StudentAgeDialogueSave.Storage;
 [BepInDependency(DialogueSavePlugin.Id)]
 public sealed class DialogueQaPlugin:BaseUnityPlugin
 {
+    static DialogueQaPlugin(){File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"qa-plugin-type-loaded.txt"),"loaded");}
     void Awake()
     {
         string root=Paths.GameRootPath;
+        File.WriteAllText(Path.Combine(root,"qa-plugin-awake.txt"),root);
         if(!root.Replace('\\','/').EndsWith("/student-age-dialogue-save/qa/runtime"))throw new Exception("QA only");
         if(File.Exists(Path.Combine(root,"sisi-up-mode.txt")))RuntimeSisiQA.Prepare(root);
         var obj=new GameObject("DialogueQA.PersistentHost");obj.hideFlags=HideFlags.HideAndDontSave;DontDestroyOnLoad(obj);
@@ -161,10 +163,18 @@ public sealed class DialogueQaDriver:MonoBehaviour
         evt.EnqueueEvt(0,1);evt.ShowNewRoundEvent();
         yield return Until(()=>adapter.IsSupportedDialogueContext,20,"native queued dialogue tracked");
         if(File.Exists(Path.Combine(root,"skip-probe.txt"))) {yield return RuntimeSkipProbeQA.Run(adapter,Check,Until,root);yield break;}
-        if(File.Exists(Path.Combine(root,"phone.txt"))) {yield return RuntimePhoneQA.Run(adapter,Check,Until,root);yield break;}
+        if(File.Exists(Path.Combine(root,"phone.txt")))
+        {
+            yield return RuntimePhoneQA.Run(adapter,Check,Until,root);
+            if(!File.Exists(Path.Combine(root,"effects.txt")))yield break;
+            UIMgr.CloseView<NewTalkView>();yield return null;
+            evt.EnqueueEvt(0,1);evt.ShowNewRoundEvent();
+            yield return Until(()=>adapter.IsSupportedDialogueContext,20,"effect matrix starts a fresh native dialogue");
+        }
         if(File.Exists(Path.Combine(root,"effects.txt"))) {yield return RuntimeEffectsQA.Run(adapter,(DialogueSaveService)service,Check,Until,root);yield break;}
         if(File.Exists(Path.Combine(root,"native-slots.txt"))) {yield return RuntimeNativeSlotsQA.Run(Check,Until,root);yield break;}
         if(File.Exists(Path.Combine(root,"layout.txt"))) {yield return RuntimeLayoutQA.Run(Check,Until,root);yield break;}
+        if(File.Exists(Path.Combine(root,"choice-click.txt"))) {yield return RuntimeChoiceClickQA.Run(Check,Until,root);yield break;}
         if(File.Exists(Path.Combine(root,"storage-perf.txt"))) {yield return RuntimeStoragePerfQA.Run(adapter,(DialogueSaveService)service,Check,Until,root);yield break;}
         if(File.Exists(Path.Combine(root,"archive-routing.txt"))) {yield return RuntimeArchiveRoutingQA.Run(adapter,ui,(DialogueSaveService)service,Check,Until,root);yield break;}
         if(File.Exists(Path.Combine(root,"perf-sweep.txt"))) {yield return RuntimePerfSweepQA.Run(adapter,Check,Until,root);yield break;}

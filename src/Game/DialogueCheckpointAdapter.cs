@@ -59,6 +59,8 @@ namespace StudentAgeDialogueSave.GameIntegration
         private bool capturing;
         private bool captureRequested;
         private bool exitCapture;
+        private string lastCaptureDiagnostic;
+        private float lastCaptureDiagnosticTime;
         private NewTalkView captureView;
         private NewTalkView playbackResumeView;
         private bool playbackResumeAuto;
@@ -238,11 +240,18 @@ namespace StudentAgeDialogueSave.GameIntegration
             if (Get<NewTalkType>(view, "talkType") != NewTalkType.Talk || textTransitionPending ||
                 Get<bool>(view, "isDelaying") || optionDepth != 0)
                 return Refuse(out reason, "请暂停自动播放或快进并等待对话停稳");
-            if (Get<bool>(view, "isPhoneing") || Get<bool>(view, "isShowingComic") ||
-                view.paperId != 0 || view.group_foreground.gameObject.activeInHierarchy ||
-                view.group_item.gameObject.activeInHierarchy || view.group_msg.gameObject.activeInHierarchy ||
-                view.img_screen_effect.gameObject.activeInHierarchy || (Get<object>(view, "curVFX") is ParticleSystem vfx && vfx != null && vfx.IsAlive(true)))
-                return Refuse(out reason, "此特殊演出或限时操作尚不支持对话存档");
+            if (Get<bool>(view,"isShowingComic")) return Refuse(out reason,"漫画演出尚未适配完整恢复，请在普通对白保存");
+            if(view.paperId!=0) return Refuse(out reason,"纸张演出尚未适配完整恢复，请在普通对白保存");
+            if(view.group_foreground.gameObject.activeInHierarchy) return Refuse(out reason,"前景演出尚未适配完整恢复，请在普通对白保存");
+            if(view.group_item.gameObject.activeInHierarchy || view.group_msg.gameObject.activeInHierarchy)
+                return Refuse(out reason,"道具或消息演出尚未适配完整恢复，请在普通对白保存");
+            if(view.img_screen_effect.gameObject.activeInHierarchy)
+                return Refuse(out reason,"屏幕叠层仍在显示，请等待演出结束后保存");
+            if(Get<object>(view,"curVFX") is ParticleSystem vfx && vfx!=null && vfx.IsAlive(true))
+                return Refuse(out reason,"粒子演出仍在播放，请等待演出结束后保存");
+            if (Get<bool>(view,"isPhoneing") && (view.icon_bg_3.image.sprite == null ||
+                !view.icon_bg_3.gameObject.activeInHierarchy || Mathf.Abs(view.icon_bg_3.image.fillAmount-.5f)>.001f))
+                return Refuse(out reason,"电话画面仍在加载或切换，请稍后保存");
             TalkCfg cfg = Get<TalkCfg>(view, "cfg");
             bool cgActive=Get<bool>(view,"isShowingCG");
             if(cgActive && CaptureCg(view)==null)return Refuse(out reason,"CG 画面仍在加载，请稍后保存");
@@ -250,11 +259,11 @@ namespace StudentAgeDialogueSave.GameIntegration
             if (cfg.screenEffect != null && cfg.screenEffect.Count > 0)
             {
                 // Native one-shot effects (flash, shake, fades, CG hide, poses, background) replay
-                // with the line on restore; lasting states (overlay, phone, item, paper, comic, VFX)
+                // are captured as settled presentation without replay; lasting states (overlay, item, paper, comic, VFX)
                 // are refused by the checks above. Unknown or mod/UP effect ids stay refused.
                 int effect = (int)cfg.screenEffect[0];
                 bool cgEffect = effect == 4015 || effect == 4019;
-                bool native = effect >= 4001 && effect <= 4019 && effect != 4016;
+                bool native = effect == 0 || (effect >= 4001 && effect <= 4019 && effect != 4016);
                 if (cgEffect ? !cgActive : !native)
                     return Refuse(out reason, "此对白的特殊演出状态尚未完成适配");
             }
@@ -413,15 +422,44 @@ namespace StudentAgeDialogueSave.GameIntegration
                         return checkpoint;
                     }
                     if (Time.realtimeSinceStartup > deadline)
+                    {
+                        ReportCaptureFailure("timeout", reason);
                         throw new TimeoutException("对话保存未完成：" + reason);
+                    }
                     await nextFrame();
                     AssertThread();
                 }
+            }
+            catch (Exception error) when (!(error is OperationCanceledException))
+            {
+                ReportCaptureFailure(error.GetType().Name, error.Message);
+                throw;
             }
             finally
             {
                 releaseCapture();
             }
+        }
+
+        internal void ReportCaptureFailure(string stage,string reason)
+        {
+            try
+            {
+                var view=UIMgr.GetView<NewTalkView>(false) as NewTalkView;
+                var cfg=view==null?null:Get<TalkCfg>(view,"cfg");
+                // IDs, state flags and the error describe the failure without recording
+                // dialogue text, player identity, save contents or credentials.
+                string entry="DialogueSave CAPTURE_FAILURE stage="+stage+" event="+rootEvent+" talk="+(cfg?.id??0)+
+                    " command="+(cfg?.screenEffect?.FirstOrDefault()??0)+" phase="+view?.talkState+
+                    " waitFrame="+(view==null?0:Get<int>(view,"waitFrame"))+" frame="+Time.frameCount+
+                    " delaying="+(view!=null && Get<bool>(view,"isDelaying"))+" phone="+(view!=null && Get<bool>(view,"isPhoneing"))+
+                    " reason="+reason;
+                string key=stage+":"+(cfg?.id??0)+":"+reason;
+                if(key==lastCaptureDiagnostic && Time.realtimeSinceStartup-lastCaptureDiagnosticTime<30f)return;
+                lastCaptureDiagnostic=key;lastCaptureDiagnosticTime=Time.realtimeSinceStartup;
+                diagnostics?.Invoke(entry);
+            }
+            catch { /* Failure diagnostics never affect the transaction. */ }
         }
 
         public bool CanRestore(out string reason)
@@ -625,6 +663,7 @@ namespace StudentAgeDialogueSave.GameIntegration
                 ["lastEffectCfgId"] = Get<int>(view, "lastEffectCfgId"),
                 ["background"] = Get<int>(view, "curBgId"),
                 ["cg"] = CaptureCg(view),
+                ["phone"] = CapturePhone(view),
                 ["speakerId"] = cfg.roleIds?.FirstOrDefault() ?? 0,
                 ["choiceSummary"] = ChoiceSummary(view),
                 ["backgroundEffect"] = CaptureBackgroundEffect(view),
@@ -650,6 +689,54 @@ namespace StudentAgeDialogueSave.GameIntegration
                     : (JToken)new JArray(Singleton<FuncMgr>.Ins.GetGuideData().addGuides),
                 ["randomState"] = CaptureRandomState(UnityEngine.Random.state)
             };
+        }
+
+        // Phone calls retain participants beyond the current TalkCfg. Reconstructing only
+        // the current line loses the remote background and native hangup removal list.
+        private static string BackgroundUrl(BgCfg cfg)
+        {
+            string url=cfg.GetBgUrl();
+            if(Path.IsPathRooted(url))return url;
+            if(url.StartsWith("Mods"))return Singleton<ModCtrl>.Ins.GetFullUrl(url);
+            return Path.Combine("Textures/",LocalizationMgr.GetLocalizeUrl(url));
+        }
+        private static JObject CapturePhone(NewTalkView view)
+        {
+            if(!Get<bool>(view,"isPhoneing"))return null;
+            var bg=Cfg.BgCfgMap.Values.FirstOrDefault(x=>BackgroundUrl(x)==view.icon_bg_3.url);
+            if(bg==null)throw new InvalidOperationException("电话背景配置已缺失，无法完整保存");
+            var color=Get<UISprite[]>(view,"bgs")[Get<int>(view,"curBgIdx")].image.color;
+            return new JObject { ["background"]=bg.id, ["origin"]=view.icon_bg_3.image.fillOrigin,
+                ["participants"]=new JArray(Get<List<int>>(view,"tmpRoleIds")),
+                ["backgroundColor"]=new JArray(color.r,color.g,color.b,color.a) };
+        }
+        private static void RestorePhone(NewTalkView view,JObject phone)
+        {
+            Set(view,"isPhoneing",phone!=null);
+            var participants=Get<List<int>>(view,"tmpRoleIds");participants.Clear();
+            view.icon_bg_3.image.DOKill();view.icon_bg_3.gameObject.SetActive(phone!=null);
+            if(phone==null)return; // Earlier snapshots have no phone state.
+            participants.AddRange(phone["participants"].ToObject<List<int>>(DataJson));
+            view.icon_bg_3.SetTextureUrl(Cfg.BgCfgMap[phone.Value<int>("background")].GetBgUrl());
+            view.icon_bg_3.image.fillOrigin=phone.Value<int>("origin");
+            view.icon_bg_3.image.fillAmount=.5f;view.icon_bg_3.image.color=Color.white;
+            Call(view,"RefreshPhoneMidLinePos");
+        }
+        private static void ValidatePhone(JObject data)
+        {
+            var token=data["phone"];
+            if(token==null || token.Type==JTokenType.Null)return;
+            if(!(token is JObject phone) || phone.Count!=4 || phone["background"]?.Type!=JTokenType.Integer ||
+                !Cfg.BgCfgMap.ContainsKey(phone.Value<int>("background")) || phone["origin"]?.Type!=JTokenType.Integer ||
+                phone.Value<int>("origin")<0 || phone.Value<int>("origin")>1 ||
+                !(phone["participants"] is JArray ids) || ids.Count>128 || ids.Any(x=>x.Type!=JTokenType.Integer) ||
+                ids.Select(x=>(int)x).Distinct().Count()!=ids.Count || !(data["roles"] is JArray roles) ||
+                ids.Any(x=>!roles.Any(r=>r["roleId"]?.Value<int>()==(int)x)))
+                throw new InvalidDataException("电话背景或参与者快照无效");
+            if(!(phone["backgroundColor"] is JArray color) || color.Count!=4 ||
+                color.Any(v=>(v.Type!=JTokenType.Float && v.Type!=JTokenType.Integer) ||
+                    float.IsNaN((float)v) || float.IsInfinity((float)v) || (float)v<0 || (float)v>1))
+                throw new InvalidDataException("电话背景颜色无效");
         }
 
         // Store the actual CG resource and zoom, never a screenshot containing UI.
@@ -720,7 +807,10 @@ namespace StudentAgeDialogueSave.GameIntegration
             // attached before native ForceMeshUpdate can trigger a canvas render.
             PreparingPresentation?.Invoke(view);
             Call(view, "RefreshBg", data.Value<int>("background"), 0f);
+            RestorePhone(view, data["phone"] as JObject);
             ApplyBackgroundEffect(view, data["backgroundEffect"] as JObject);
+            if(data["phone"] is JObject phone) Get<UISprite[]>(view,"bgs")[Get<int>(view,"curBgIdx")].image.color =
+                new Color((float)phone["backgroundColor"][0],(float)phone["backgroundColor"][1],(float)phone["backgroundColor"][2],(float)phone["backgroundColor"][3]);
             Set(view, "enableSceneSound", true);
             view.group_foreground.gameObject.SetActive(false);
             view.group_evt.gameObject.SetActive(false);
@@ -1041,6 +1131,7 @@ namespace StudentAgeDialogueSave.GameIntegration
             data["history"].ToObject<List<TalkData>>(DataJson);
             data["roleCloths"].ToObject<Dictionary<int, int>>(DataJson);
             data["posRoles"].ToObject<Dictionary<TalkAxis, List<int>>>(DataJson);
+            ValidatePhone(data);
             RestoreRandomState((JObject)data["randomState"]);
             DialogueAudioAdapter.Validate((JObject)data["audio"]);
             if (data["pendingGuides"] == null || (data["pendingGuides"].Type != JTokenType.Null &&
