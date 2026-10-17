@@ -86,7 +86,7 @@ public static class RuntimeHistoryRollbackQA
             File.WriteAllText(Path.Combine(root,"results/history-rollback-effects.json"),new JObject{
                 ["choiceJumpMs"]=choiceMs,["firstJumpMs"]=firstMs,["captureMedianMs"]=samples[50],
                 ["captureP95Ms"]=samples[95],["captureMaxMs"]=samples[99],["entries"]=entries.Length,
-                ["distinctWorldBuffers"]=entries.Select(e=>e.Checkpoint.State.WorldBytes).Distinct().Count(),
+                ["distinctWorldBuffers"]=entries.Select(e=>e.Checkpoint.State.WorldIdentity).Distinct().Count(),
                 ["effectsRewound"]=true,["noDiskSaves"]=true}.ToString());
         }
         finally

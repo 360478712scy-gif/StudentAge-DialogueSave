@@ -315,13 +315,17 @@ namespace StudentAgeDialogueSave.GameIntegration
 
         public GameCheckpoint Capture() => CaptureCore(false, out _);
 
-        // History owns detached world bytes and presentation state, entirely in memory.
+        // History owns a lossless compressed world and shared immutable log prefixes.
         // Global configuration and plugin binaries are diagnostics, not world state:
         // do not traverse/hash them for each line or replay effects when jumping.
         internal HistoryCheckpoint CaptureHistory()
         {
             var time=System.Diagnostics.Stopwatch.StartNew();
-            GameCheckpoint state=CaptureCore(true,out ConfigFingerprintSnapshot config,true);
+            GameCheckpoint state=CaptureCore(true,out _,true);
+            var current=state.WorldBytes;
+            if(lastHistoryBytes!=null && lastHistoryBytes.Length==current.Length && Enumerable.SequenceEqual(lastHistoryBytes,current))state.ShareHistoryWorld(lastHistoryState);
+            else state.PackHistoryWorld();
+            lastHistoryBytes=current;lastHistoryState=state;
             return new HistoryCheckpoint { State=state, CaptureMilliseconds=time.Elapsed.TotalMilliseconds };
         }
         internal Task RestoreHistoryAsync(HistoryCheckpoint history, CancellationToken cancellation)
@@ -329,7 +333,7 @@ namespace StudentAgeDialogueSave.GameIntegration
             AssertThread();
             if(history?.State==null)throw new InvalidDataException("缺少完整历史快照");
             var state=new GameCheckpoint { WorldBytes=history.State.WorldBytes,
-                Dialogue=(JObject)history.State.Dialogue.DeepClone(),Brief=history.State.Brief };
+                Dialogue=history.State.MaterializeDialogue(),Brief=history.State.Brief };
             // Returning to a line is a manual reading action, not a request to resume
             // the auto/fast-forward mode used when its checkpoint was recorded.
             // Only change the detached history copy; disk saves keep their playback policy.
@@ -339,6 +343,33 @@ namespace StudentAgeDialogueSave.GameIntegration
             return RestoreCheckedAsync(state,cancellation,history.Config);
         }
 
+        byte[] lastHistoryBytes;
+        GameCheckpoint lastHistoryState;
+        readonly List<TalkData> capturedLogRows=new List<TalkData>();
+        readonly List<CheckpointHistoryLog> capturedLogNodes=new List<CheckpointHistoryLog>();
+        internal void ResetHistoryCapture()
+        {
+            lastHistoryBytes=null;lastHistoryState=null;
+            capturedLogRows.Clear();capturedLogNodes.Clear();
+        }
+        CheckpointHistoryLog CaptureHistoryLog(NewTalkView view)
+        {
+            var rows=Get<List<TalkData>>(view,"historys");int shared=0;
+            // Native appends are immutable; compare all fields as third-party mods
+            // can edit earlier rows. A changed prefix starts a detached new branch.
+            while(shared<rows.Count && shared<capturedLogRows.Count && SameLogRow(rows[shared],capturedLogRows[shared]))shared++;
+            if(shared<capturedLogRows.Count){capturedLogRows.RemoveRange(shared,capturedLogRows.Count-shared);capturedLogNodes.RemoveRange(shared,capturedLogNodes.Count-shared);}
+            for(int i=shared;i<rows.Count;i++)
+            {
+                var token=JToken.FromObject(rows[i],DataJson);
+                capturedLogRows.Add(token.ToObject<TalkData>(DataJson));
+                capturedLogNodes.Add(new CheckpointHistoryLog(i==0?null:capturedLogNodes[i-1],token));
+            }
+            return capturedLogNodes.Count==0?null:capturedLogNodes[capturedLogNodes.Count-1];
+        }
+        static bool SameLogRow(TalkData a,TalkData b)=>a.talkId==b.talkId && a.content==b.content && a.roleName==b.roleName &&
+            ((a.talkRoleIds==null && b.talkRoleIds==null) || a.talkRoleIds!=null && b.talkRoleIds!=null && a.talkRoleIds.SequenceEqual(b.talkRoleIds)) &&
+            ((a.cloth==null && b.cloth==null) || a.cloth!=null && b.cloth!=null && a.cloth.Count==b.cloth.Count && a.cloth.All(kv=>b.cloth.TryGetValue(kv.Key,out int value) && value==kv.Value));
         bool capturingHistory;
         private GameCheckpoint CaptureCore(bool detachConfig, out ConfigFingerprintSnapshot config,bool history=false)
         {
@@ -353,7 +384,7 @@ namespace StudentAgeDialogueSave.GameIntegration
             {
                 JObject dialogue = Measure("dialogue", () => CaptureDialogue(view, detachConfig, history));
                 byte[] bytes = CaptureWorld();
-                return new GameCheckpoint { Dialogue = dialogue, WorldBytes = bytes, Brief = BuildBrief(view), HistoryTrail=history?null:CaptureHistoryTrail?.Invoke() };
+                return new GameCheckpoint { Dialogue = dialogue, WorldBytes = bytes, Brief = BuildBrief(view), NativeHistory=history?CaptureHistoryLog(view):null, HistoryTrail=history?null:CaptureHistoryTrail?.Invoke() };
             }
             finally { capturing = false; Trace("capture.total", elapsed.Elapsed.TotalMilliseconds); capturingHistory = false; }
         }
@@ -499,9 +530,10 @@ namespace StudentAgeDialogueSave.GameIntegration
                     if(history==null)throw new InvalidDataException("目标存档缺少对话分支。");
                     foreach(var point in decoded)
                     {
-                        var prior=(JArray)point.State.Dialogue["history"];
+                        var prior=point.State.NativeHistory;
+                        var legacy=(JArray)point.State.Dialogue["history"];
                         if(point.State.Brief.RunId!=snapshot.Brief.RunId || point.State.Brief.SteamId!=snapshot.Brief.SteamId ||
-                            prior.Count>history.Count || !prior.SequenceEqual(history.Take(prior.Count),JToken.EqualityComparer))
+                            (prior!=null ? !prior.MatchesPrefix(history) : legacy.Count>history.Count || !legacy.SequenceEqual(history.Take(legacy.Count),JToken.EqualityComparer)))
                             throw new InvalidDataException("回看记录与目标存档的周目或对话分支不一致。");
                     }
                     return decoded;
@@ -676,7 +708,7 @@ namespace StudentAgeDialogueSave.GameIntegration
                 ["cg"] = CaptureCg(view),
                 ["phone"] = CapturePhone(view),
                 ["overlay"] = CaptureOverlay(view),
-                ["backgroundSource"] = Get<int>(view, "curBgId") <= 0 ? ShownBackgroundSource(view) : null,
+                ["backgroundSource"] = new JValue((object)(Get<int>(view, "curBgId") <= 0 ? ShownBackgroundSource(view) : null)),
                 ["speakerId"] = cfg.roleIds?.FirstOrDefault() ?? 0,
                 ["choiceSummary"] = ChoiceSummary(view),
                 ["backgroundEffect"] = CaptureBackgroundEffect(view),
@@ -691,7 +723,7 @@ namespace StudentAgeDialogueSave.GameIntegration
                 ["roles"] = new JArray(roles.Values.Select(CaptureRole)),
                 ["roleCloths"] = JObject.FromObject(Get<Dictionary<int, int>>(view, "roleCloths"), DataJson),
                 ["posRoles"] = JObject.FromObject(Get<Dictionary<TalkAxis, List<int>>>(view, "posRoles"), DataJson),
-                ["history"] = JArray.FromObject(Get<List<TalkData>>(view, "historys"), DataJson),
+                ["history"] = history ? new JArray() : JArray.FromObject(Get<List<TalkData>>(view, "historys"), DataJson),
                 ["options"] = new JArray(options.Select(x => new JObject { ["id"] = x.id, ["rate"] = x.rate,
                     ["callback"] = DialogueContinuation.CaptureCallback(x.callback) })),
                 ["configDigest"] = "", // Legacy optional diagnostic; archive integrity is checked separately.
@@ -1250,7 +1282,7 @@ namespace StudentAgeDialogueSave.GameIntegration
                 throw new InvalidDataException("对话背景或会话标识缺失");
             ValidateOverlay(data);
             var source = data["backgroundSource"];
-            if (source != null && source.Type != JTokenType.Null &&
+            if (source != null && source.Type != JTokenType.Null && !(source is JValue nullSource && nullSource.Value == null) &&
                 (data.Value<int>("background") > 0 || source.Type != JTokenType.String || !IsConfiguredBackgroundSource((string)source)))
                 throw new InvalidDataException("对话背景图片无效");
             if (!(data["history"] is JArray history) || history.Count > 10000) throw new InvalidDataException("对话历史无效");
@@ -1731,6 +1763,7 @@ namespace StudentAgeDialogueSave.GameIntegration
             finally
             {
                 patches.Clear();
+                ResetHistoryCapture();
                 if (current == this) current = null;
             }
             if (errors.Count > 0) throw new AggregateException("对话适配器补丁清理未全部完成", errors);

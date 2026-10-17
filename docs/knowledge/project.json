@@ -1,6 +1,6 @@
 {
  "schema_version": 1,
- "updated": "2026-10-01",
+ "updated": "2026-10-11",
  "scope": "仅保存当前有效事实、决策及检索入口；历史过程见STATUS，证据路径可能仅本机存在。",
  "entries": [
   {
@@ -92,12 +92,15 @@
    ],
    "facts": [
     "默认：水印显示、ADV、按钮音量80、仅已读(SkipUnread=false)、文字30字/秒、自动49。不要静默覆盖已有玩家偏好。",
-    "恢复默认先确认，只改模组草稿；取消恢复保持草稿，取消设置回滚，应用后保存；原生设置的取消语义保留。"
+    "恢复默认先确认，只改模组草稿；取消恢复保持草稿，取消设置回滚，应用后保存；原生设置的取消语义保留。",
+    "场景跳过以进入当前句前的已读状态判断；首读句刚显示完也不能越过未读拦截，仅响点击声。实际跳过的每句进入全局已读；电话跳过在拨通/挂断处交给原生演出，不逐句快进。"
    ],
    "files": [
     "src/UI/AdvPreferences.cs",
     "src/UI/AdvSettings.cs",
-    "tests/RuntimeSettingsQA.cs"
+    "tests/RuntimeSettingsQA.cs",
+    "src/UI/AdvReadPolicy.cs",
+    "tests/RuntimeOctoberQA.cs"
    ],
    "check": "python3 tools/run_qa.py --settings-visual"
   },
@@ -138,21 +141,27 @@
     "微软雅黑",
     "汉化",
     "日文",
-    "字库"
+    "字库",
+    "原版字体",
+    "对话字体"
    ],
    "facts": [
     "汉化补丁 deffontmap.tjs 实际指定微软雅黑；已解包的完整字体是日文字库，不代表补丁附带了微软雅黑。来源记录在 chinese-font-provenance.json。",
     "正式运行一次读取系统 msyh.ttc/ttf，校验 family=Microsoft YaHei；缺失回退游戏 Source Han Sans CN。不内置苹方/微软雅黑文件。CrossOver 的私有字体句柄需定向 FontEngine 路由，不能改全局字体。",
-    "旧 QA 苹方覆盖曾掩盖真实字体。只有显式 --local-font 才允许试用；正式验收检查实际 faceInfo、中文字符和字体回退，不只看变量名。"
+    "旧 QA 苹方覆盖曾掩盖真实字体。只有显式 --local-font 才允许试用；正式验收检查实际 faceInfo、中文字符和字体回退，不只看变量名。",
+    "模组配置对话字体默认模组，可切原版TMP；仅正文/姓名，普通和CG各存原字体并在退出恢复。草稿预览/应用/取消/默认已接入；0.2.12已本机安装，字体视觉待测。"
    ],
    "files": [
     "src/UI/AdvChineseFont.cs",
     "src/UI/AdvWidgets.cs",
     "tests/RuntimeSkinQA.cs",
     "tests/RuntimeSettingsQA.cs",
-    "assets/adv-skin/chinese-font-provenance.json"
+    "assets/adv-skin/chinese-font-provenance.json",
+    "src/UI/AdvPreferences.cs",
+    "src/UI/AdvDialogueController.cs",
+    "src/UI/AdvSettings.cs"
    ],
-   "check": "python3 tools/run_qa.py --settings-visual"
+   "check": "python3 tools/build.py；实际字体按PENDING_TESTS待测。"
   },
   {
    "id": "ui.dialogue",
@@ -258,7 +267,7 @@
    "facts": [
     "设置新增对话框页：3列ON/OFF卡片，顶部全部ON/OFF，14个实际操作组；ON=询问，OFF=直接执行，与弹窗不再提示共用真实配置。草稿应用才生效，取消不写；只提交改过的键，保留期间弹窗产生的新记忆。",
     "ConfirmationOptions统一保存/覆盖/快存/读取/快读/原版读/标题/回溯/跳过/默认/复制/交换/删除及其他原生操作；沿用Interface旧跳过/回溯键。快存新接确认并保持请求去重、取消释放。",
-    "其他原生提示保留文案+回调身份独立键；全部ON/其他ON用代次恢复已记忆及尚未绑定旧键，重启也生效。原版框沿用样式追加勾选，共用语义键；ADV仍校园蓝头+白底。",
+    "仅接管对话、存档、设置页发起的确认；其他游戏页不改样式、不加记忆勾选、不按插件偏好自动确认。范围内原生提示保留独立键，原版框沿用样式追加勾选，ADV用校园蓝头白底。",
     "弹窗和页脚提示按实际字体宽度均衡换行，控制行宽、不留孤字、不拆Unicode组合字符；取消不记忆，确认勾选才关闭。队列/暂停/关闭百叶窗、pressed优先与源音效继续保留。",
     "最终水平百叶/备注光标多行选区/确认队列/卸载通过，见QA_FINAL_20260924；确认和回溯延迟回调均在卸载时撤销。真实输入法组合输入未测。"
    ],
@@ -364,10 +373,10 @@
     "快捷键"
    ],
    "facts": [
-    "仅Original模式：对话存档一级入口及其二级三类，原生手动/自动/快速与九宫格保留；ADV新页查ui.archive。Esc仅保存/加载两项，保留原五项布局。",
-    "原版新增四保存项向左展开，不挪原生日志/自动/菜单。快捷键S/L/H/J先查原生冲突；键帽参照common6 F/S，#734D31粗无衬线；中文克隆当前可见日志标签完整材质，不从隐藏池取。",
-    "ADV工具栏顺序SAVE/LOAD/Q.SAVE/Q.LOAD/日志/自动/快进/跳过/隐藏/设置；当前折叠控件用源hold锁状态，按当前代码/截图，旧箭头要求已被后续修改覆盖。首选页复用校园蓝背景/圆角卡片，ADV旁标推荐，两张真实预览及整卡选择持久化保留；已随前批安装并隔离验证。",
-    "原版设置不再加底部对话界面按钮；快进速度下克隆原生行，左右箭头选原版/ADV，端点隐藏箭头，确认提交/取消撤销。首启仍用校园蓝双预览。查NativeModeSetting；隔离两箭头、端点、取消重开、确认切换已过；首启双预览/推荐及模式持久化已过。 ADV存档入口仅关闭SaveView首次资源加载转圈，保留实际读写加载；Original恢复原值。"
+    "原版式页保留对话存档一级/二级三类、原生三类及九格；范围由AdvArchiveScope独立控制。对话中原生强制读取，DSAV子页独立保存状态。Esc保留原布局。",
+    "原版四保存项向左展开，不挪日志/自动/菜单。键帽参照common6 F/S，#734D31粗无衬线；中文克隆可见日志完整材质；热键冲突查DialogueHotkeyBindings。",
+    "ADV工具栏SAVE/LOAD/Q.SAVE/Q.LOAD/日志/自动/快进/跳过/隐藏/设置；折叠用源hold锁状态。首选页校园蓝双预览、ADV推荐、整卡选择持久化，前批已验证。",
+    "Esc先取消顶层确认/备注，再关存读档/设置/日志，松键不穿透；设置撤销草稿。0.2.12三范围对话内外关闭已测，报告QA_ESC_20261009.md。"
    ],
    "files": [
     "src/UI/DialogueUiController.cs",
@@ -378,7 +387,7 @@
     "src/UI/AdvDialogueController.cs",
     "src/UI/NativeModeSetting.cs"
    ],
-   "check": "python3 tools/run_qa.py --controls"
+   "check": "dotnet run --project tests/ArchivePolicyCheck/Check.csproj；游戏入口按PENDING_TESTS。"
   },
   {
    "id": "storage.restore",
@@ -395,14 +404,17 @@
    "facts": [
     "恢复完整世界/效果阶段/随机/实际选项/continuation；检查目标必要节点，不因二进制或版本差异直接拒读。全局指纹/DLL哈希不进正常保存热路径。",
     "旧日志缺完整快照不能补造；新档内嵌当前已有历史，捕获时固定分支，后台压缩独立数据。相同对白阶段去重但选项独立记录，不能以丢效果换性能。",
-    "当前源码HistoryTrail v2分块压缩/XOR世界差量，弱引用缓存只用于已封存不可变检查点，前驱变化必须重编码；兼容v1，完整性/分支预检不省略，纯数据预检移后台。回溯运行及卸载已合批通过。",
-    "CG保持完整子视图/文字/缩放，不重放解锁；0.2.9追加可选phone背景/分屏/临时参与者/原背景颜色，沿原生挂断清理。纯场景不以全局MVID拒读；必要节点和实际回调审查保留。"
+    "0.2.13共享不可变日志前缀，完整世界后台无损压缩；不丢历史。HistoryTrail v2兼容v1，前驱变化重编码、分支预检保留；验证见QA_LONG_SESSION_20261010。",
+    "CG保持完整子视图/文字/缩放，不重放解锁；0.2.9追加可选phone背景/分屏/临时参与者/原背景颜色，沿原生挂断清理。纯场景不以全局MVID拒读；必要节点和实际回调审查保留。",
+    "0.2.11修复内存历史的backgroundSource空字符串JValue被误拒读；捕获规范化为JSON null，并兼容已有内存空值，非空资源仍验证。"
    ],
    "files": [
     "src/Game/DialogueCheckpointAdapter.cs",
     "src/Game/DialogueContinuation.cs",
     "src/Game/DialogueHistory.cs",
     "src/Game/HistoryTrailCodec.cs",
+    "src/Game/CheckpointHistoryLog.cs",
+    "src/Game/HistoryWorldBuffer.cs",
     "tests/RuntimeSemanticQA.cs"
    ],
    "check": "python3 tools/check.py；涉及运行恢复时按 docs/DEVELOPMENT.md 选语义/兼容检查"
@@ -503,9 +515,9 @@
    ],
    "facts": [
     "生产DLL：dist/StudentAgeDialogueSave/BepInEx/plugins/StudentAgeDialogueSave/StudentAgeDialogueSave.dll；本机Steam bottle工坊1991040/3804899191/plugins/StudentAgeDialogueSave.dll。不要装qa/runtime里的重写DLL。",
-    "没加载/旧版：查实际启动路径、LogOutput.log、plugins、enabled_mods.txt/启用状态，核对构建与安装hash，游戏重启后才加载；不能凭猜测删除BepInEx。",
-    "本机安装授权后：游戏退出→备份qa/local-install-backups→原子替换→校验hash→记录收据；打包不自动上传。观察于2026-09-23：最近本机替换未上传，正式游戏未重开验收；当前状态必须重新核对。",
-    "0.2.9已更新既有3804899191：Steam成功、LEGAL=False、远端0.2.9精确5文件SHA256匹配、UTC2026-10-01T04:22:18；原项目重建哈希同验收，未手动替换在用游戏。回退qa/source-backups/20261001-0.2.9。"
+    "没加载/旧版：查实际启动路径、LogOutput.log、plugins、enabled_mods.txt/启用状态，核对构建与安装hash，游戏重启后才加载；不能凭猜测删除BepInEx。日志“No [MultiFolderLoader] section”=自装BepInEx覆盖官方配置，工坊插件全不加载，需验证游戏文件。",
+    "安装前退出游戏并备份；原子替换生产DLL后校验哈希和收据。发布需本轮授权，旧观察不代表当前安装。",
+    "0.2.14已发布3804899191：Steam成功、LEGAL=False、精确5文件下载哈希匹配；收据qa/releases/0.2.14/release-state.json。隔离QA前须CrossOver Steam已登录，否则退出码53。"
    ],
    "files": [
     "tools/build.py",
@@ -590,14 +602,18 @@
     "备注",
     "删除",
     "缩略图",
-    "Q版"
+    "Q版",
+    "全局启用",
+    "仅对话中启用",
+    "不启用",
+    "存档范围"
    ],
    "facts": [
     "12槽4×3，蓝读/粉存/绿快读/黄原版；滚轮整页防抖.16秒。原图外框阴影已合背景，按参考拟合下2/柔边12/边缘alpha .08；440票券分段伸缩/文字右8已看1920及1280截图。",
-    "保存页空槽保存、非空覆盖；读取/快读页只读取，空槽不写。跨周目覆盖原子提交；覆盖确认可记忆。四编辑互斥，KeepEditing默认开。原版自动档独立筛选；原版界面按钮绕过ADV。标题保存禁用；同类点击不转场。加减共用页数，仅减空末页。",
+    "AdvArchiveScope：Global所有入口ADV/转场；DialogueOnly默认仅对话ADV，标题/Esc原版无转场；Disabled均原版式带对话存档入口。对话外ADV操作原版档，对话内保存DSAV/原版分类只读。空位保存/有档覆盖，读取空位不写；标题禁保存、同类无转场、末页只减空页。",
     "对话档复制/备注发布不可变版本；交换两份完整body加单个commit回执才可见；缺失/损坏任一成员仍显示旧head。空移带祖先删除闭包；删除交换成员保留事务body供另一成员验证，分支/过期选择拒绝。",
-    "原版排列/备注在dialogue_native_layout.json；NativeSlotEdits后台真实指纹/原子索引/独立备份，复制完整字节。物理新编号避开隐藏名单，关闭重开后也不复用已删名称；两设备索引合并未验收。",
-    "提示仅左下框。原版4并发读头，默认玩家名+地点+年季、季节色/地点背景，手写备注优先、主角Q版；ADV保留对白/实际选项/备注，人物Q头像→本人完整Q→主角。CG按保存图像预览；备注显式深色光标并在开窗后聚焦。"
+    "原版排列/备注在dialogue_native_layout.json；NativeSlotEdits指纹/原子索引/备份、复制完整字节。新编号避开隐藏名单；全局保存前/写后/删旧前核对目标，变化保留文件。原生快读禁复制/交换。两设备合并待测。",
+    "提示仅左下。原版4并发读头并原位更新，保留按钮身份；默认玩家名+地点+年季、季节色/地点背景，手写优先/主角Q。ADV对白/选项/备注，人物Q→本人完整Q→主角，CG存图预览，备注深色光标聚焦。字体/范围并排，末排速度224高，总高740≤750；0.2.12已安装，完整流程待测。"
    ],
    "files": [
     "src/UI/AdvSavePage.cs",
@@ -608,30 +624,35 @@
     "src/Storage/RepositoryEdits.cs",
     "src/Storage/NativeSlotEdits.cs",
     "docs/PENDING_TESTS.md",
-    "docs/QA_ARCHIVE_CONTROLS_20260924.md"
+    "docs/QA_ARCHIVE_CONTROLS_20260924.md",
+    "src/UI/ArchiveUiPolicy.cs",
+    "tests/ArchivePolicyCheck/Program.cs"
    ],
-   "check": "dotnet run --project tests/StorageTests.csproj -- --archive-edits；最终游戏验证按PENDING_TESTS，新ADV不能套旧九格验收脚本。",
+   "check": "dotnet run --project tests/ArchivePolicyCheck/Check.csproj；dotnet run --project tests/StorageTests.csproj -- --archive-edits；实际入口/动画按PENDING_TESTS待测。",
    "evidence": "qa/final-batch-20260924/"
   },
   {
    "id": "qa.modsave",
-   "title": "Mod保存修复0.2.9",
+   "title": "Mod保存适配",
    "keywords": [
     "Mod",
     "电话",
     "音乐",
-    "存档失败"
+    "存档失败",
+    "思思"
    ],
    "facts": [
     "修复电话、原生[0]误拒绝、纯场景MVID拒读和原生音乐倍率20旧档拒读；负数/NaN/无穷值、缺资源和未知回调仍检查。",
     "失败日志只含ID/阶段/原因、无正文；手动相同原因30秒节流，自动阻塞10秒后记录、重复60秒。",
-    "最终哈希de2caa88cb4a25da5b3acf90e1095c3738afd4c28de3e41488a61f2cf788de5d；思思+UP1.0.23普通/两处CG读写、旧失败档原字节恢复、132节点自然结束通过。",
+    "0.2.14补齐site-greeting；思思+UP两种存档页读写、同句恢复及回调仅一次通过，本机安装未发布；普通/CG与取样边界见报告。",
     "Documents QA数字副本反复出现，原游戏无副本；移至/tmp后恢复运行，来源疑似同步冲突未确证，QA重写DLL不打包。",
     "11:00报告证明1814项当时一致，初始清单被误record覆盖；新1913清单不证明全程不变，证据冻结qa/live-protection-evidence。"
    ],
    "files": [
     "docs/QA_MOD_SAVE_20261001.md",
-    "src/Game/DialogueAudioAdapter.cs"
+    "src/Game/DialogueAudioAdapter.cs",
+    "docs/QA_SISI_SAVE_20261011.md",
+    "src/Game/DialogueContinuation.cs"
    ]
   }
  ]

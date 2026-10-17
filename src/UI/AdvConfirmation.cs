@@ -23,6 +23,7 @@ namespace StudentAgeDialogueSave.UI
         static ConfigEntry<bool> Preference(string key)=>ConfirmationOptions.Entry(AdvDialogueController.Active.Configuration,key);
         static bool Enabled(string key)=>ConfirmationOptions.Enabled(AdvDialogueController.Active.Configuration,key);
         static string nativeScope;
+        static string pendingNativeKey;
         static readonly Dictionary<string,string> nativeAliases=new Dictionary<string,string>();
         static string ResolveNative(string hash)=>nativeAliases.TryGetValue(hash,out var known)?known:hash;
         static string NativeKey(string title,string description,string yes,string no,Action callback,string tips)
@@ -35,14 +36,28 @@ namespace StudentAgeDialogueSave.UI
             harmony.Patch(AccessTools.Method(typeof(HintHelper),"ShowConfirm"),prefix:new HarmonyMethod(typeof(AdvConfirmation),nameof(NativeAsk)));
             harmony.Patch(AccessTools.Method(typeof(CommonComfirmView),"OnOpen"),postfix:new HarmonyMethod(typeof(AdvConfirmation),nameof(NativeOpened)));
         }
+        // A globally installed hook must only own prompts from our current surface.
+        static bool OwnsNativePrompt()
+        {
+            if (nativeScope != null || AdvSavePage.Active != null || AdvSettings.Active != null) return true;
+            var top = UIMgr.GetTopView(ViewType.Guide, ViewType.Side);
+            return top is View.Evt.NewTalkView || top is View.Main.SaveView || top is View.Main.SettingView;
+        }
+        static bool UseAdvPrompt()
+        {
+            if(AdvSavePage.Active!=null)return true;
+            var top=UIMgr.GetTopView(ViewType.Guide,ViewType.Side);
+            if(top is View.Main.SaveView save)return DialogueUiController.IsAdvArchive(save);
+            return AdvDialogueController.Active?.IsAdv==true;
+        }
         static bool NativeAsk(string _desc,Action _ok,Action _close,bool _showCloseBtn,string _title,string _okTxt,string _closeTxt,string _tipsTxt)
         {
-            var owner=AdvDialogueController.Active;if(owner==null)return true;
+            var owner=AdvDialogueController.Active;if(owner==null || !OwnsNativePrompt())return true;
             string key=NativeKey(_title,_desc,_okTxt,_closeTxt,_ok,_tipsTxt);
             if(nativeScope!=null){nativeAliases[key]=nativeScope;if(nativeAliases.Count>256){nativeAliases.Clear();nativeAliases[key]=nativeScope;}}
             key=ResolveNative(key);
             if(!Enabled(key)){_ok?.Invoke();return false;}
-            if(!owner.IsAdv)return true;
+            if(!UseAdvPrompt()){pendingNativeKey=key;return true;}
             Show(AdvWidgets.ReadingFont(TMP_Settings.defaultFontAsset),key,
                 (string.IsNullOrEmpty(_title)?"":_title+"\n")+_desc+(string.IsNullOrEmpty(_tipsTxt)?"":"\n"+_tipsTxt),
                 _ok,_close,_okTxt??"是",_closeTxt??"否",_showCloseBtn);
@@ -51,12 +66,14 @@ namespace StudentAgeDialogueSave.UI
         // Original mode keeps its native frame, labels and close/callback path.
         static void NativeOpened(CommonComfirmView __instance)
         {
-            if(AdvDialogueController.Active==null)return;
+            var acceptedKey=pendingNativeKey;pendingNativeKey=null;
             var view=__instance;var old=view.transform.Find("DialogueSave.Remember");
             if(old!=null){old.gameObject.SetActive(false);UnityEngine.Object.Destroy(old.gameObject);}
+            if(AdvDialogueController.Active==null || acceptedKey==null)return;
             string key=NativeKey(view.parms.Length>4?view.parms[4] as string:null,view.parms[0] as string,
                 view.parms.Length>5?view.parms[5] as string:null,view.parms.Length>6?view.parms[6] as string:null,view.parms.Length>1?view.parms[1] as Action:null,view.parms.Length>7?view.parms[7] as string:null);
             key=ResolveNative(key);
+            if(key!=acceptedKey)return;
             var row=AdvWidgets.Rect("DialogueSave.Remember",view.transform,0,0,300,40);
             row.anchorMin=row.anchorMax=row.pivot=new Vector2(.5f,0);
             row.anchoredPosition=new Vector2(0,16);
@@ -133,7 +150,7 @@ namespace StudentAgeDialogueSave.UI
         }
         internal static void Ask(string title,Action yes,Action no=null,string key="Action")
         {
-            if(AdvDialogueController.Active?.IsAdv!=true)
+            if(!UseAdvPrompt())
             {var previous=nativeScope;nativeScope=key;try{HintHelper.ShowConfirm(title,yes,no);}finally{nativeScope=previous;}return;}
             Show(AdvWidgets.ReadingFont(TMP_Settings.defaultFontAsset),key,title,yes,no);
         }
@@ -151,7 +168,7 @@ namespace StudentAgeDialogueSave.UI
         internal static void Release()
         {
             lifecycle++;releasing=true;closing=false;Cancel();pause?.Dispose();pause=null;while(pending.Count>0)pending.Dequeue()();
-            foreach(var s in sprites.Values)UnityEngine.Object.Destroy(s);sprites.Clear();nativeAliases.Clear();nativeScope=null;releasing=false;
+            foreach(var s in sprites.Values)UnityEngine.Object.Destroy(s);sprites.Clear();nativeAliases.Clear();nativeScope=null;pendingNativeKey=null;releasing=false;
         }
     }
     internal sealed class AdvConfirmToggle:MonoBehaviour,IPointerEnterHandler,IPointerExitHandler,IPointerDownHandler,IPointerUpHandler

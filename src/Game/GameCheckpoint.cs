@@ -24,7 +24,21 @@ namespace StudentAgeDialogueSave.GameIntegration
     {
         internal HistoryCheckpoint[] HistoryTrail;
         public JObject Dialogue;
-        public byte[] WorldBytes;
+        byte[] worldBytes;
+        HistoryWorldBuffer packedWorld;
+        internal CheckpointHistoryLog NativeHistory;
+        public byte[] WorldBytes {get=>worldBytes??packedWorld?.Read();set{worldBytes=value;packedWorld=null;}}
+        internal object WorldIdentity=>(object)packedWorld??worldBytes;
+        internal int WorldLength=>worldBytes?.Length??packedWorld?.Length??0;
+        internal void PackHistoryWorld(){if(worldBytes==null)return;packedWorld=new HistoryWorldBuffer(worldBytes);worldBytes=null;}
+        internal void ShareHistoryWorld(GameCheckpoint source){packedWorld=source.packedWorld;worldBytes=source.worldBytes;}
+        internal int HistoryCount=>NativeHistory?.Count??(Dialogue["history"] as JArray)?.Count??0;
+        internal JObject MaterializeDialogue()
+        {
+            var result=(JObject)Dialogue.DeepClone();
+            if(NativeHistory!=null)result["history"]=NativeHistory.Materialize();
+            return result;
+        }
         public CheckpointBrief Brief;
     }
 }

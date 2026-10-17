@@ -43,7 +43,7 @@ namespace StudentAgeDialogueSave.UI
                 case "音频":return "分别调整游戏主音量、背景音乐、音效和语音。";
                 default:return "调整对话界面、水印、按钮音效、阅读速度与跳过范围。";
             }
-            if(name=="Settings.Defaults")return "恢复模组默认值：显示水印、ADV、音量80、仅已读、文字30、自动49；应用后保存。";
+            if(name=="Settings.Defaults")return "恢复模组默认值：ADV、模组字体、存档仅对话中启用、水印显示、音量80、仅已读、文字30、自动49；应用后保存。";
             if(name=="Settings.Cancel")return "放弃本次设置修改，返回游戏。";
             if(name=="Settings.Apply")return "保存本次设置修改，返回游戏。";
             if(name=="Settings.Confirm.AllOn")return "将所有执行确认设为 ON，包括曾勾选下次不再提示的操作；应用后生效。";
@@ -64,6 +64,8 @@ namespace StudentAgeDialogueSave.UI
                 case "语音":return "调整角色语音的播放音量。";
                 case "左下角学生时代水印":return caption=="显示"?"显示 ADV 对话框左下角的“学生时代”水印。":"隐藏 ADV 对话框左下角的“学生时代”水印。";
                 case "对话界面风格":return caption=="ADV"?"使用 ADV 对话界面及其存档、回看、自动和跳过功能。":"使用游戏原版对话界面。";
+                case "对话字体":return caption=="原版字体"?"对话正文和姓名使用游戏原版字体；下方实时预览，应用后生效。":"对话正文和姓名使用模组字体；下方实时预览，应用后生效。";
+                case "ADV 存档界面":return caption=="全局启用"?"所有入口使用 ADV 存档界面及转场；对话外保存原版档，对话中保存对话档。":caption=="仅对话中启用"?"仅对话中使用 ADV 存档界面和转场；主界面、Esc 使用原版页，保留对话存档入口。":"所有入口使用原版存档页，保留顶部对话存档入口。";
                 case "按钮音效音量":return "调整模组按钮提示音的音量；松开滑块可试听。";
                 case "跳过文本范围":return caption=="全部文本"?"允许跳过未读文本；实际经过的文本会记录为已读，遇到选项停止。":"仅跳过已读文本；遇到未读文本或选项时停止。";
                 case "文本浮现速度":return "调整 ADV 每秒显示的字数；下方可实时预览。";

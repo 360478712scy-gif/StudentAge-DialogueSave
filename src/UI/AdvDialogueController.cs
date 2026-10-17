@@ -56,10 +56,11 @@ namespace StudentAgeDialogueSave.UI
         RectTransform nameRule,bookmark,bookmarkGold;
         AdvSkinButton autoSkin,skipSkin,foldSkin;
         bool sceneSkipPending,escapeOwned;
+        int escapeReleaseFrame=-1;
         readonly HashSet<int> shielded=new HashSet<int>();
         Action restoreText;
         bool dark;
-        TMP_FontAsset font;
+        TMP_FontAsset font,nativeDialogueFont;
         IDisposable modalPause,hiddenPause;
         float nextScan,nextHistory,nextSkip,toolbarSlide;
         bool folded,hidden,skipping,disposed,firstPrompt,modalKeepsDialogue;
@@ -133,8 +134,9 @@ namespace StudentAgeDialogueSave.UI
         static bool GlobalKeyPrefix(int _hotKey,ref bool __result)
         {
             var a=Active;
+            if(a?.HandleEscape()==true){__result=true;return false;}
             if(AdvSavePage.Active?.EditorOpen==true){if(_hotKey==108 || _hotKey==121)AdvSavePage.Active.CloseEditor();__result=true;return false;}
-            if(a?.HandleEscape()==true || a?.HandleSpace()==true){__result=true;return false;}
+            if(a?.HandleSpace()==true){__result=true;return false;}
             if(a?.ModalOpen!=true)return true;
             if((_hotKey==108 || _hotKey==121) && a.preference.Value!="Ask")a.CloseModal();
             __result=true;return false;
@@ -163,16 +165,30 @@ namespace StudentAgeDialogueSave.UI
         bool HandleEscape()
         {
             var key=Keyboard.current?.escapeKey;if(key==null)return false;
+            if(escapeReleaseFrame==Time.frameCount)return true;
             if(escapeOwned)
             {
-                if(key.wasReleasedThisFrame || !key.isPressed)escapeOwned=false;
+                if(key.wasReleasedThisFrame || !key.isPressed){escapeOwned=false;escapeReleaseFrame=Time.frameCount;}
                 return true;
             }
-            if(ModalOpen && preference.Value!="Ask" && key.wasPressedThisFrame)
+            if(key.wasPressedThisFrame && HasEscapeSurface())
             {
-                escapeOwned=true;CloseModal();consumedFrame=Time.frameCount;return true;
+                escapeOwned=true;DismissEscapeSurface();consumedFrame=Time.frameCount;return true;
             }
             return false;
+        }
+        bool HasEscapeSurface()=>AdvConfirmation.IsOpen || AdvSettingsTransition.Active!=null ||
+            AdvSavePage.Active!=null || AdvSettings.Active!=null || saves.HasArchiveOnTop ||
+            (modal!=null && preference.Value!="Ask");
+        internal void DismissEscapeSurface()
+        {
+            // One key press owns both edges and dismisses only the foremost layer.
+            if(AdvSettingsTransition.Active!=null)return;
+            if(AdvConfirmation.IsOpen){AdvConfirmation.Cancel();return;}
+            if(AdvSavePage.Active!=null){AdvSavePage.Active.RequestClose();return;}
+            if(AdvSettings.Active!=null){AdvSettings.Active.RequestCancel();return;}
+            if(saves.HasArchiveOnTop){saves.CloseArchiveOnTop();return;}
+            if(preference.Value!="Ask")CloseModal();
         }
         internal bool HandleSpace()
         {
@@ -253,6 +269,13 @@ namespace StudentAgeDialogueSave.UI
         {if(Active?.UsesAdv(__instance)==true)AccessTools.Field(typeof(NewTalkView),"autoTalkTimeSpan").SetValue(__instance,Active.Preferences.AutoDelay);}
         internal void ApplyPreferences()
         {AdvSkin.ButtonVolume=Preferences.ButtonVolume.Value;if(watermark!=null)watermark.gameObject.SetActive(Preferences.Watermark.Value && talk!=null && !(bool)CgField.GetValue(talk));if(talk!=null)NativeSettingsChanged(talk);}
+        internal TMP_FontAsset DialogueFont(bool original)
+        {
+            if(!original)return AdvWidgets.DialogueFontOverride??AdvWidgets.ReadingFont(font??TMP_Settings.defaultFontAsset);
+            if(nativeDialogueFont!=null)return nativeDialogueFont;
+            var native=UIMgr.GetView<NewTalkView>(false) as NewTalkView;
+            return native?.txtex_content?.font??TMP_Settings.defaultFontAsset??font;
+        }
 
         internal void Tick()
         {
@@ -328,7 +351,7 @@ namespace StudentAgeDialogueSave.UI
         void Attach(NewTalkView view)
         {
             LastAttachedBeforeReady=!view.isViewReady;
-            talk=view;transitionPending=DialoguePresentationPolicy.IsTransition(view);font=AdvWidgets.DialogueFontOverride??AdvWidgets.ReadingFont(view.txtex_content.font,true);fullLine=view.tmpTalks!=null && view.tmpTalkIdx>=0 && view.tmpTalkIdx<view.tmpTalks.Count?view.tmpTalks[view.tmpTalkIdx]:view.txtex_content.text;
+            talk=view;transitionPending=DialoguePresentationPolicy.IsTransition(view);nativeDialogueFont=view.txtex_content.font; font=AdvWidgets.DialogueFontOverride??AdvWidgets.ReadingFont(nativeDialogueFont,true);fullLine=view.tmpTalks!=null && view.tmpTalkIdx>=0 && view.tmpTalkIdx<view.tmpTalks.Count?view.tmpTalks[view.tmpTalkIdx]:view.txtex_content.text;
             nextHistory=Time.unscaledTime+.35f;
             canvas=AdvWidgets.Canvas("DialogueSave.ADV",29000);
             var root=AdvWidgets.Rect("Frame",canvas.transform,0,0,1920,1080);
@@ -349,9 +372,9 @@ namespace StudentAgeDialogueSave.UI
                 line.anchorMax=new Vector2(1,1);line.sizeDelta=new Vector2(-2,1);
             }
             nameLabel=AdvWidgets.Label("Speaker",bodyRoot.transform,font,"",209,792,206,52,36,AdvWidgets.Ink);
-            nameLabel.font=font;
+            nameLabel.font=DialogueFont(Preferences.OriginalDialogueFont.Value);
             nameLabel.fontStyle=FontStyles.Normal;
-            nameLabel.fontSharedMaterial=AdvWidgets.DialogueShadow(font);
+            nameLabel.fontSharedMaterial=AdvWidgets.DialogueShadow(nameLabel.font);
             endMarker=AdvWidgets.Rect("ADV.EndPaperPlane",bodyRoot.transform,1644,1000,30,30).gameObject.AddComponent<AdvPaperPlane>();endMarker.raycastTarget=false;endMarker.color=new Color(.96f,.95f,.9f,.95f);endMarker.rectTransform.pivot=new Vector2(.5f,.5f);
             endMarker.gameObject.AddComponent<Canvas>();
             shownText=view.txtex_content;restoreText=MoveText(shownText,bodyRoot.transform);
@@ -405,7 +428,7 @@ namespace StudentAgeDialogueSave.UI
             r.SetParent(parent,false);r.anchorMin=r.anchorMax=new Vector2(0,1);r.pivot=new Vector2(0,1);
             r.anchoredPosition=new Vector2(210,-874);r.sizeDelta=new Vector2(1490,124);r.localScale=Vector3.one;
             text.textPreprocessor=new DialogueQuotes(this,preprocessor);
-            text.font=font;text.fontSharedMaterial=AdvWidgets.DialogueShadow(font);text.UpdateMeshPadding();text.enableVertexGradient=false;
+            text.font=Preferences.OriginalDialogueFont.Value?originalFont:DialogueFont(false);text.fontSharedMaterial=AdvWidgets.DialogueShadow(text.font);text.UpdateMeshPadding();text.enableVertexGradient=false;
             text.raycastTarget=false;text.color=AdvWidgets.Ink;text.fontSize=31;text.enableAutoSizing=false;text.lineSpacing=13;
             text.alignment=TextAlignmentOptions.TopLeft;text.overflowMode=TextOverflowModes.Overflow;return restore;
         }
@@ -634,7 +657,7 @@ namespace StudentAgeDialogueSave.UI
         void ToggleSkip(){if(talk!=null){AutoMethod.Invoke(talk,new object[]{false});skipping=!skipping;}}
         void RequestSceneSkip()
         {
-            if(talk==null || ModalOpen || hidden)return;
+            if(talk==null || ModalOpen || hidden || !AdvReadPolicy.CanSkip(talk))return;
             skipping=false;
             if(!skipConfirmation.Value){BeginSceneSkip();return;}
             var opening=AdvSettingsTransition.Capture();
@@ -653,7 +676,7 @@ namespace StudentAgeDialogueSave.UI
         }
         void BeginSceneSkip()
         {
-            if(talk==null)return;
+            if(talk==null || !AdvReadPolicy.CanSkip(talk))return;
             AutoMethod.Invoke(talk,new object[]{false});skipping=false;sceneSkipPending=true;
         }
         void ContinueSceneSkip()
@@ -662,16 +685,12 @@ namespace StudentAgeDialogueSave.UI
             if(talk.talkState==TalkState.Option || talk.talkState==TalkState.ShowPaper){sceneSkipPending=false;return;}
             if((bool)DelayingField.GetValue(talk))return;
             var cfg=CfgField.GetValue(talk) as TalkCfg;if(cfg==null){sceneSkipPending=false;return;}
-            // Like the native skip button, skipping a scene does not depend on read state;
-            // the "fast-forward range" setting only governs fast-forward.
-            // Native skip jumps over the hang-up line during a call, leaving the call state on
-            // and every later character hidden. Play the call out line by line first.
-            if((bool)PhoneField.GetValue(talk))
-            {
-                if(Time.unscaledTime>=nextSkip){nextSkip=Time.unscaledTime+.1f;NextMethod.Invoke(talk,null);}
-                if(talk.viewState!=ViewState.Opened)sceneSkipPending=false;
-                return;
-            }
+            if(!AdvReadPolicy.CanSkip(talk)){sceneSkipPending=false;return;}
+            // Run the native skip loop once. Phone start/hang-up are explicit
+            // presentation boundaries, never a rapid series of OnClickNext calls.
+            if(AdvReadPolicy.PhoneBoundary(cfg) &&
+                (talk.talkState!=TalkState.AnimEnd || (bool)PhoneField.GetValue(talk) &&
+                 Mathf.Abs(talk.icon_bg_3.image.fillAmount-.5f)>.001f))return;
             if(cfg.GetNextTalk()==0 && (cfg.option==null || cfg.option.Count==0) && (cfg.miniGame==null || cfg.miniGame.Count==0))
             {
                 // Native advance owns final effects and the continuation callback.
@@ -684,7 +703,7 @@ namespace StudentAgeDialogueSave.UI
             // The game's skip stops at choices, minigames, or the last line. Only
             // finish that last line; never fabricate a branch or a completion callback.
             cfg=CfgField.GetValue(talk) as TalkCfg;
-            if(cfg!=null && cfg.GetNextTalk()==0 && (cfg.option==null || cfg.option.Count==0) && (cfg.miniGame==null || cfg.miniGame.Count==0))sceneSkipPending=true;
+            if(cfg!=null && AdvReadPolicy.CanSkip(talk) && (cfg.GetNextTalk()==0 || AdvReadPolicy.PhoneBoundary(cfg)) && (cfg.option==null || cfg.option.Count==0) && (cfg.miniGame==null || cfg.miniGame.Count==0))sceneSkipPending=true;
         }
         void OpenSettings(){skipping=false;UIMgr.OpenView<SettingView>(UILayerType.Tips,null,new object[]{true});}
         void AttachSettings(SettingView view)

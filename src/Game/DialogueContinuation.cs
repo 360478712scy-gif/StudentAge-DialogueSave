@@ -72,7 +72,10 @@ namespace StudentAgeDialogueSave.GameIntegration
             new Rule { Key = "egame-refresh", TypeName = "EGameData+<>c", MethodName = "<RequestEGameStuck>b__17_0", Fields = new string[0] },
             new Rule { Key = "intent-fail-refresh", TypeName = "IntentData+<>c", MethodName = "<GetIntentFail>b__17_0", Fields = new string[0] },
             new Rule { Key = "home-to-map", TypeName = "View.Main.MainView+<>c", MethodName = "<OnClickMap>b__26_0", Fields = new string[0] },
-            new Rule { Key = "leave-site", TypeName = "Sdk.BaseView", MethodName = "CloseView", Fields = new[] { "mapId" }, SceneTarget = true }
+            new Rule { Key = "leave-site", TypeName = "Sdk.BaseView", MethodName = "CloseView", Fields = new[] { "mapId" }, SceneTarget = true },
+            // Native scene greetings return to the same site, enable its close button
+            // and refresh it. Bind that audited callback to the restored site instance.
+            new Rule { Key = "site-greeting", TypeName = "View.Main.MapSceneView", MethodName = "<ShowGreetingEvt>b__47_0", Fields = new[] { "mapId" }, SceneTarget = true }
         };
 
         sealed class SceneCloseContinuation
@@ -151,7 +154,7 @@ namespace StudentAgeDialogueSave.GameIntegration
             {
                 var scene = callback.Target as MapSceneView;
                 if (scene == null) throw new InvalidOperationException("此关闭窗口返回流程尚未适配。");
-                return CaptureSceneClose(scene);
+                return CaptureSceneCallback(scene,rule);
             }
             if (rule.StudyTarget && !ReferenceEquals(callback.Target, Singleton<RoleMgr>.Ins.GetStudyData(false)))
                 throw new InvalidOperationException("考试返回流程没有绑定到当前世界。");
@@ -176,12 +179,14 @@ namespace StudentAgeDialogueSave.GameIntegration
             return new JObject { ["rule"] = rule.Key, ["token"] = method.MetadataToken, ["fields"] = fields };
         }
 
-        static JObject CaptureSceneClose(MapSceneView scene)
+        static JObject CaptureSceneClose(MapSceneView scene)=>CaptureSceneCallback(scene,FindRule("leave-site"));
+
+        static JObject CaptureSceneCallback(MapSceneView scene,Rule rule)
         {
             if (scene == null || !ReferenceEquals(scene, UIMgr.GetView<MapSceneView>(false)))
                 throw new InvalidOperationException("离开场景返回流程未绑定当前场景。");
             int mapId = (int)GetField(typeof(MapSceneView), "mapId").GetValue(scene);
-            return new JObject { ["rule"] = "leave-site", ["token"] = FindRule("leave-site").Method.MetadataToken,
+            return new JObject { ["rule"] = rule.Key, ["token"] = rule.Method.MetadataToken,
                 ["fields"] = new JObject { ["mapId"] = mapId } };
         }
 
@@ -213,10 +218,10 @@ namespace StudentAgeDialogueSave.GameIntegration
                     throw new InvalidDataException("保存的 NPC 场景配置已缺失。");
             }
             ValidateCallback(value["callback"]);
-            if (value["callback"] is JObject savedCallback && (string)savedCallback["rule"] == "leave-site" &&
+            if (value["callback"] is JObject savedCallback && FindRule((string)savedCallback["rule"]).SceneTarget &&
                 !views.OfType<JObject>().Any(v => (string)v["kind"] == "site" &&
                     Integer(v["args"][0]) == Integer(savedCallback["fields"]["mapId"])))
-                throw new InvalidDataException("离开场景回调缺少对应的原场景。");
+                throw new InvalidDataException("场景返回回调缺少对应的原场景。");
         }
 
         public static void ValidateCallback(JToken callback)
@@ -322,6 +327,12 @@ namespace StudentAgeDialogueSave.GameIntegration
         {
             Validate(value);
             view.callback = RestoreCallback(value["callback"]);
+            if(value["callback"] is JObject callback && (string)callback["rule"]=="site-greeting")
+            {
+                var scene=UIMgr.GetView<MapSceneView>(false) as MapSceneView;
+                scene.ShowCloseBtn(false);
+                GetField(typeof(MapSceneView),"enableCloseByRightClick").SetValue(scene,false);
+            }
         }
 
         public static Action RestoreCallback(JToken callback)
@@ -336,7 +347,8 @@ namespace StudentAgeDialogueSave.GameIntegration
                 var scene = UIMgr.GetView<MapSceneView>(false) as MapSceneView;
                 if (scene == null || (int)GetField(typeof(MapSceneView), "mapId").GetValue(scene) != Integer(value["fields"]["mapId"]))
                     throw new InvalidDataException("离开场景返回窗口尚未恢复。");
-                return new SceneCloseContinuation(scene).Invoke;
+                return rule.Key=="leave-site" ? new SceneCloseContinuation(scene).Invoke :
+                    (Action)Delegate.CreateDelegate(typeof(Action),scene,method);
             }
             object target;
             if (rule.StudyTarget) target = Singleton<RoleMgr>.Ins.GetStudyData(false);

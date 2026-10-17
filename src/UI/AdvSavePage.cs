@@ -29,13 +29,16 @@ namespace StudentAgeDialogueSave.UI
         readonly Dictionary<string,int> dialogueDisplayPositions=new Dictionary<string,int>();
         CanvasGroup group;AdvSettingsHelp help;GameObject emptyDetail;Slider pageRail;ScrollRect commentScroll;Button detailToggle;
         int mode,page=1,pageCount=10,operation=-1,sourceSlot,hoverSlot;DialogueUiRecord source;
-        bool nativeAutomatic,detailed,busy,closing,dirty,updatingRail,titleBrowse;
+        bool nativeAutomatic,detailed,busy,closing,dirty,updatingRail,titleBrowse,dialogueContext;
+        bool NativeSlots=>ArchiveUiPolicy.UsesNativeSlots(dialogueContext,mode);
+        bool AutomaticList=>mode==3 && nativeAutomatic;
+        bool SequentialNativeList=>AutomaticList || !dialogueContext && mode==2;
         BepInEx.Configuration.ConfigEntry<int>[] pageLimits;
         string Status{set{help.SetStatus(value);}}
-        internal static AdvSavePage Open(SaveView view,DialogueSaveService service)
+        internal static AdvSavePage Open(SaveView view,DialogueSaveService service,bool saving)
         {
             var root=AdvWidgets.Canvas("DialogueSave.Archive",30700);AdvWidgets.CenterDesign(root);var page=root.AddComponent<AdvSavePage>();Active=page;
-            page.view=view;page.service=service;page.titleBrowse=DialogueUiController.IsTitleScreen();page.mode=view.isSaveMode&&!page.titleBrowse?0:1;page.font=AdvWidgets.ReadingFont(TMP_Settings.defaultFontAsset);
+            page.view=view;page.service=service;page.dialogueContext=service.IsDialogueContext;page.titleBrowse=DialogueUiController.IsTitleScreen();page.mode=saving&&!page.titleBrowse?0:1;page.font=AdvWidgets.ReadingFont(TMP_Settings.defaultFontAsset);
             var config=AdvDialogueController.Active.Configuration;
             page.holdEdit=config.Bind("Archive","KeepEditing",true,"编辑完成后保持当前编辑工具；关闭则成功一次后取消选择。");
             page.pageLimits=new[]{config.Bind("Archive","ManualPages",10,"保存与读取共用的存档页数。"),config.Bind("Archive","QuickPages",1,"快速存档显示页数。"),config.Bind("Archive","NativePages",10,"原版存档显示页数。")};
@@ -111,7 +114,7 @@ namespace StudentAgeDialogueSave.UI
             Hint(removePage.gameObject,"从最后减少一页；有存档的末页不会删除。保存与读取共用页数。");
             Hint(addPage.gameObject,"在最后增加一页。保存与读取共用页数。");
             foreach(string name in new[]{"Archive.First","Archive.UpTen","Archive.UpOne","Archive.DownOne","Archive.DownTen","Archive.Last"})Hint(transform.Find(name).gameObject,"切换当前显示的存档页；上方加减号用于增减总页数。");
-            foreach(var b in tabs)Hint(b.gameObject,"切换存档分类和颜色；空位保存，有数据的位置读取。");
+            foreach(var b in tabs)Hint(b.gameObject,"保存页保存或覆盖；读取页和原版存档分类只读取，空位不写入。");
             for(int i=0;i<tools.Length;i++)Hint(tools[i].gameObject,new[]{"选择来源，再选目标复制；再次点击取消。","选择两个位置交换；可交换到空位。","编辑备注后，存档只显示备注，不再显示原对白。","选择要删除的存档；删除前会再次确认。"}[i]);
             Hint(detailToggle.gameObject,"切换存档卡片的图片预览和详细注释。");
             Footer("Archive.Return",5,1400,()=>view.CloseView());
@@ -153,17 +156,16 @@ namespace StudentAgeDialogueSave.UI
         internal void RefreshRecords()
         {
             if(closing)return;slots.Clear();nativePositions.Clear();
-            if(mode==3)
+            if(NativeSlots)
             {
                 native.Refresh();
                 // Manual cards sit at their stable native number, so overwrite/delete never
                 // reshuffles other saves. Automatic saves are listed in order.
-                foreach(var pair in native.Slots.Where(p=>nativeAutomatic?p.Value.isAuto:p.Value.isManual).OrderBy(p=>p.Key))
+                foreach(var pair in native.Slots.Where(p=>AutomaticList?p.Value.isAuto:!dialogueContext && mode==2?p.Value.isQuick:p.Value.isManual).OrderBy(p=>p.Key))
                 {
-                    int slot=nativeAutomatic?slots.Count+1:pair.Key;
+                    int slot=SequentialNativeList?slots.Count+1:pair.Key;
                     slots[slot]=native.Record(pair.Value);nativePositions[slot]=pair.Key;
                 }
-                native.RequestGenderHeaders();
             }
             else
             {
@@ -179,6 +181,7 @@ namespace StudentAgeDialogueSave.UI
         }
         void RefreshCards()
         {
+            dirty=false;
             foreach(var go in cards){go.SetActive(false);Destroy(go);}cards.Clear();
             for(int i=0;i<4;i++)AdvArchiveSkin.Select(tabs[i],mode==i,1);
             tabs[0].interactable=!titleBrowse;
@@ -189,18 +192,22 @@ namespace StudentAgeDialogueSave.UI
                 if(tint.Brush!=null)tint.Brush.enabled=false;
             }
             for(int i=0;i<4;i++)AdvArchiveSkin.Select(tools[i],mode==3 && i==0?nativeAutomatic:operation==i);
+            tools[0].interactable=ArchiveUiPolicy.AllowsReorder(dialogueContext,mode);
+            tools[1].interactable=ArchiveUiPolicy.AllowsReorder(dialogueContext,mode);
             tools[0].GetComponentInChildren<TextMeshProUGUI>().text=mode==3?"自动存档":"复制存档";
             tools[0].GetComponent<SettingsHelpTarget>().Description=mode==3?"开启显示原版自动存档，关闭只显示手动存档；可同时使用备注或删除工具。":"选择来源，再选目标复制；再次点击取消。";
             tools[1].GetComponentInChildren<TextMeshProUGUI>().text=mode==3?"原版界面":"交换存档";
             tools[1].GetComponent<SettingsHelpTarget>().Description=mode==3?"打开游戏原版存档界面。":"选择两个位置交换；可交换到空位。";
+            if(!ArchiveUiPolicy.AllowsReorder(dialogueContext,mode))
+            {tools[0].GetComponent<SettingsHelpTarget>().Description="原版快速存档支持读取、备注和删除，不支持复制。";tools[1].GetComponent<SettingsHelpTarget>().Description="原版快速存档不交换到手动存档位。";}
             title.sprite=AdvArchiveSkin.LetterSprite(mode);background.sprite=AdvArchiveSkin.Background(mode);
             updatingRail=true;pageRail.maxValue=pageCount;pageRail.minValue=1;pageRail.SetValueWithoutNotify(pageCount+1-page);updatingRail=false;
             emptyDetail.GetComponentInChildren<Image>().color=AdvArchiveSkin.DetailColor(mode);
             detail.sprite=AdvArchiveSkin.Art("detail_base__null_",mode);pagination.text=page.ToString("0000")+"/"+pageCount.ToString("0000");
             foreach(string label in new[]{"TIME","DATE","COMMENT"})transform.Find(label).GetComponent<TextMeshProUGUI>().color=AdvArchiveSkin.Themes[mode];
             detailCheck.Selected=detailed;detailCheck.Refresh();
-            for(int i=0;i<SlotsPerPage;i++){int slot=(page-1)*SlotsPerPage+i+1;if(mode==3 && nativePositions.TryGetValue(slot,out int actual))native.Request(actual);BuildSlot(i,slot);}
-            slots.TryGetValue(hoverSlot,out var hovered);ShowDetail(hoverSlot,hovered);dirty=false;
+            for(int i=0;i<SlotsPerPage;i++){int slot=(page-1)*SlotsPerPage+i+1;if(NativeSlots && nativePositions.TryGetValue(slot,out int actual))native.Request(actual);BuildSlot(i,slot);}
+            slots.TryGetValue(hoverSlot,out var hovered);ShowDetail(hoverSlot,hovered);
         }
         static string SlotName(int slot)=>"s"+((slot-1)/SlotsPerPage+1).ToString("0000")+"-"+((slot-1)%SlotsPerPage+1).ToString("00");
         static string StoryDate(DialogueUiRecord r)
@@ -209,7 +216,7 @@ namespace StudentAgeDialogueSave.UI
         {
             if(r==null)return "";
             if(r.Comment!=null)return r.Comment;
-            if(mode!=3)return r.Summary??"";
+            if(!NativeSlots)return r.Summary??"";
             string Safe(string text)=>(text??"").Replace("<","＜").Replace(">","＞");
             return Safe(r.RoleName)+" · "+Safe(r.Location)+" · <color=#"+ColorUtility.ToHtmlStringRGB(SeasonColor(r))+">"+Safe(StoryDate(r).Replace("-",""))+"</color>";
         }
@@ -225,7 +232,7 @@ namespace StudentAgeDialogueSave.UI
             var image=root.gameObject.AddComponent<Image>();image.sprite=AdvArchiveSkin.Art("item_off",mode);
             var button=root.gameObject.AddComponent<AdvButton>();button.targetGraphic=image;button.transition=Selectable.Transition.None;var nav=button.navigation;nav.mode=Navigation.Mode.None;button.navigation=nav;
             var id=AdvWidgets.Label("Slot id",root,font,SlotName(slot),24,11,126,28,19,AdvArchiveSkin.Ink);id.fontStyle=FontStyles.Bold;
-            var era=AdvWidgets.Label("Date",root,font,StoryDate(record),134,11,125,28,17,AdvArchiveSkin.Ink);era.alignment=TextAlignmentOptions.Right;era.fontStyle=FontStyles.Bold;if(mode==3)era.color=SeasonColor(record);
+            var era=AdvWidgets.Label("Date",root,font,StoryDate(record),134,11,125,28,17,AdvArchiveSkin.Ink);era.alignment=TextAlignmentOptions.Right;era.fontStyle=FontStyles.Bold;if(NativeSlots)era.color=SeasonColor(record);
             if(!detailed)
             {
                 // The preview overlaps the solid header: leave that part untouched.
@@ -235,13 +242,13 @@ namespace StudentAgeDialogueSave.UI
                 if(!HasPreview(record))NoImage(root,28,40,220,124);
                 if(record!=null){var chibi=Picture("Speaker chibi",root,192,100,72,70);SetChibi(chibi,record);}
             }
-            var text=AdvWidgets.Label("Comment",root,font,Caption(record),12,detailed?48:168,254,detailed?172:52,22,AdvArchiveSkin.Ink);text.enableWordWrapping=true;text.alignment=TextAlignmentOptions.TopLeft;text.overflowMode=TextOverflowModes.Ellipsis;text.richText=mode==3 && record?.Comment==null;
+            var text=AdvWidgets.Label("Comment",root,font,Caption(record),12,detailed?48:168,254,detailed?172:52,22,AdvArchiveSkin.Ink);text.enableWordWrapping=true;text.alignment=TextAlignmentOptions.TopLeft;text.overflowMode=TextOverflowModes.Ellipsis;text.richText=NativeSlots && record?.Comment==null;
             var stamp=AdvWidgets.Label("Time",root,font,record==null?"":record.CreatedUtc.ToLocalTime().ToString("yyyy/MM/dd HH:mm"),106,222,159,22,14,new Color32(126,150,166,255));stamp.alignment=TextAlignmentOptions.Right;
             var cursor=AdvWidgets.Rect("Hover outline",root,2,2,272,248).gameObject.AddComponent<Image>();cursor.sprite=AdvArchiveSkin.Cursor(mode);cursor.enabled=false;cursor.raycastTarget=false;
-            var hover=root.gameObject.AddComponent<ArchiveSlotHover>();hover.Cursor=cursor;hover.Hover=over=>{if(over)ShowDetail(slot,record);};
+            var hover=root.gameObject.AddComponent<ArchiveSlotHover>();hover.Cursor=cursor;hover.Hover=over=>{if(over){slots.TryGetValue(slot,out var current);ShowDetail(slot,current);}};
             hover.Background=image;hover.Idle=AdvArchiveSkin.Art("item_off",mode);hover.Over=AdvArchiveSkin.Art("item_over",mode);hover.Down=AdvArchiveSkin.Art("item_on",mode);hover.Selected=sourceSlot==slot && source!=null;
             Hint(root.gameObject,IsSavePage?(record==null?"保存到 ":"覆盖 ")+SlotName(slot)+"。":record==null?"此存档位为空，无法读取。":"读取 "+SlotName(slot)+" 的数据。");
-            button.onClick.AddListener(()=>ClickSlot(slot,record));
+            button.onClick.AddListener(()=>{slots.TryGetValue(slot,out var current);ClickSlot(slot,current);});
         }
         void NoImage(Transform parent,float x,float y,float w,float h,bool colored=false)
         {
@@ -256,11 +263,11 @@ namespace StudentAgeDialogueSave.UI
             if(record==null || !Cfg.BgCfgMap.TryGetValue(PreviewBackground(record),out var background))return;
             image.color=Color.white;ArchivePreview.Set(image,background.GetBgUrl(record.GradeState));
         }
-        int PreviewBackground(DialogueUiRecord record)=>record?.BackgroundId>0?record.BackgroundId:mode==3?(Cfg.MapCfgMap.TryGetValue(1,out var home)?home.bg:100):0;
+        int PreviewBackground(DialogueUiRecord record)=>record?.BackgroundId>0?record.BackgroundId:NativeSlots?(Cfg.MapCfgMap.TryGetValue(1,out var home)?home.bg:100):0;
         void SetChibi(Image image,DialogueUiRecord record)
         {
-            var gender=(GenderDefine)record.Gender;Cfg.PersonCfgMap.TryGetValue(mode==3?0:record.SpeakerId,out var person);
-            if(mode!=3 && (person==null || person.id==0) && !string.IsNullOrEmpty(record.Speaker))
+            var gender=(GenderDefine)record.Gender;Cfg.PersonCfgMap.TryGetValue(NativeSlots?0:record.SpeakerId,out var person);
+            if(!NativeSlots && (person==null || person.id==0) && !string.IsNullOrEmpty(record.Speaker))
             {
                 string speaker=System.Text.RegularExpressions.Regex.Replace(record.Speaker,"<[^>]*>","").Trim('【','】',' ',':','：');
                 var named=Cfg.PersonCfgMap.Values.FirstOrDefault(p=>p.id>0 && p.name==speaker);if(named!=null)person=named;
@@ -272,7 +279,7 @@ namespace StudentAgeDialogueSave.UI
         }
         void ShowDetail(int slot,DialogueUiRecord record)
         {
-            if(slot>0)hoverSlot=slot;number.text=slot==0?"":SlotName(slot);time.text=record==null?"":record.CreatedUtc.ToLocalTime().ToString("yyyy/MM/dd HH:mm:ss");date.text=StoryDate(record);comment.richText=mode==3 && record?.Comment==null;comment.text=Caption(record);date.color=mode==3?SeasonColor(record):AdvArchiveSkin.Ink;
+            if(slot>0)hoverSlot=slot;number.text=slot==0?"":SlotName(slot);time.text=record==null?"":record.CreatedUtc.ToLocalTime().ToString("yyyy/MM/dd HH:mm:ss");date.text=StoryDate(record);comment.richText=NativeSlots && record?.Comment==null;comment.text=Caption(record);date.color=NativeSlots?SeasonColor(record):AdvArchiveSkin.Ink;
             comment.rectTransform.sizeDelta=new Vector2(380,Mathf.Max(190,comment.GetPreferredValues(comment.text,380,0).y));commentScroll.verticalNormalizedPosition=1;
             emptyDetail.SetActive(!HasPreview(record));SetPreview(preview,record);
             Status=operation>=0?(source==null?"选择要"+new[]{"复制","交换","编辑备注","删除"}[operation]+"的存档。":"已选择 "+SlotName(sourceSlot)+"，请选择目标存档位；再次点工具可取消。"):
@@ -280,7 +287,7 @@ namespace StudentAgeDialogueSave.UI
             if(record?.IsConflict==true)Status="此存档存在设备分支，可选择读取；编辑前请先处理冲突。";
         }
         void MarkSource(){foreach(var card in cards){var h=card.GetComponent<ArchiveSlotHover>();h.Selected=source!=null && card.name=="Archive.Slot"+sourceSlot;h.Refresh();}}
-        void SelectOperation(int id){if(busy || editor!=null || AdvSettingsTransition.Active!=null)return;if(mode==3 && id==0){nativeAutomatic=!nativeAutomatic;page=1;hoverSlot=0;source=null;RefreshRecords();return;}if(mode==3 && id==1){DialogueUiController.OpenOriginalArchive(view);return;}operation=operation==id?-1:id;source=null;RefreshCards();}
+        void SelectOperation(int id){if(busy || editor!=null || AdvSettingsTransition.Active!=null || id<2 && !ArchiveUiPolicy.AllowsReorder(dialogueContext,mode))return;if(mode==3 && id==0){nativeAutomatic=!nativeAutomatic;page=1;hoverSlot=0;source=null;RefreshRecords();return;}if(mode==3 && id==1){DialogueUiController.OpenOriginalArchive(view);return;}operation=operation==id?-1:id;source=null;RefreshCards();}
         void SetPage(int next){if(busy || editor!=null || closing)return;next=Mathf.Clamp(next,1,pageCount);if(page==next)return;page=next;hoverSlot=0;RefreshCards();}
         void TurnPage(int delta)=>SetPage(page+delta);
         public void OnScroll(PointerEventData e)
@@ -290,22 +297,22 @@ namespace StudentAgeDialogueSave.UI
             if(Time.unscaledTime-lastWheel<.16f)return;
             lastWheel=Time.unscaledTime;TurnPage(e.scrollDelta.y<0?1:-1);e.Use();
         }
-        bool IsSavePage=>mode==0 || (mode==3 && view.isSaveMode && !nativeAutomatic);
+        bool IsSavePage=>ArchiveUiPolicy.Saves(mode,titleBrowse);
         void ClickSlot(int slot,DialogueUiRecord record)
         {
             if(busy || closing || editor!=null || AdvConfirmation.IsOpen || AdvSettingsTransition.Active!=null)return;
             if(operation<0)
             {
-                if(IsSavePage)
+                var action=ArchiveUiPolicy.Action(mode,titleBrowse,record!=null);
+                if(action==ArchiveSlotAction.Save)
                 {
                     if(titleBrowse){Status="请先进入游戏后保存。";return;}
-                    if(mode==3 && nativeAutomatic){Status="自动存档由游戏生成；关闭自动存档可查看或创建手动存档。";return;}
-                    if(mode==3 && Game.GetGameState()!=GameState.Running){Status="请先进入游戏后保存。";return;}
-                    if(!service.IsDialogueContext && mode!=3){Status="请在对话中保存。";return;}
+                    if(NativeSlots && Game.GetGameState()!=GameState.Running){Status="请先进入游戏后保存。";return;}
+                    if(!service.IsDialogueContext && !NativeSlots){Status="请在对话中保存。";return;}
                     AdvConfirmation.Show(font,record==null?"SaveEmpty":"Overwrite",(record==null?"保存到 ":"覆盖 ")+SlotName(slot)+" 吗？",()=>Save(slot,record));
                 }
-                else if(record==null)Status="此存档位为空，无法读取。";
-                else AdvConfirmation.Show(font,mode==3?"NativeLoad":"Load","读取 "+SlotName(slot)+"，离开当前进度吗？",()=>Load(record));
+                else if(action==ArchiveSlotAction.Empty)Status="此存档位为空，无法读取。";
+                else AdvConfirmation.Show(font,NativeSlots?"NativeLoad":"Load","读取 "+SlotName(slot)+"，离开当前进度吗？",()=>Load(record));
                 return;
             }
             if(operation<2)
@@ -321,15 +328,46 @@ namespace StudentAgeDialogueSave.UI
         void Save(int slot,DialogueUiRecord replaced=null)
         {
             busy=true;
-            if(mode==3)
+            if(NativeSlots)
             {
-                int position=native.FreeNativePosition(),target=NativeTarget(slot);
+                if(!ArchiveUiPolicy.AllowsNativeSave(service.IsDialogueContext,titleBrowse)){busy=false;Status="对话中只能读取原版存档。";return;}
+                int target=NativeTarget(slot),position;
+                try
+                {
+                    native.Refresh();native.Slots.TryGetValue(target,out var before);
+                    if(!ArchiveUiPolicy.TargetUnchanged(replaced?.RevisionId,replaced?.CreatedUtc??default,before?.fileName,before?.date??default))
+                        throw new InvalidOperationException("存档列表已变化，请重新选择保存位置。");
+                    position=native.FreeNativePosition();
+                }
+                catch(Exception ex){busy=false;RefreshRecords();Status=ex.Message;return;}
                 Game.ManualSaveGame(position,null,null,async success=>
                 {
                     if(this==null || closing)return;
                     if(!success){busy=false;Status="原版保存未完成。";return;}
-                    try{native.Refresh();var saved=native.Slots.FirstOrDefault(p=>p.Value.isManual && p.Value.pos==position);if(saved.Value==null)throw new InvalidOperationException("找不到新写入的原版存档，请刷新后检查。");if(saved.Key!=target){await native.Edit("swap",saved.Key,target);if(replaced!=null)await native.Edit("delete",saved.Key,saved.Key,null);}nativeDisplayPositions[target]=slot;if(this==null || closing)return;RefreshRecords();Status="原版存档已保存。";}
-                    catch(Exception ex){if(this!=null && !closing)Status="存档已保存，但排列更新失败："+ex.Message;}
+                    try
+                    {
+                        native.Refresh();
+                        var saved=native.Slots.FirstOrDefault(p=>p.Value.isManual && p.Value.pos==position);
+                        if(saved.Value==null)throw new InvalidOperationException("找不到新写入的原版存档，请刷新后检查。");
+                        if(saved.Key!=target)
+                        {
+                            native.Slots.TryGetValue(target,out var current);
+                            if(!ArchiveUiPolicy.TargetUnchanged(replaced?.RevisionId,replaced?.CreatedUtc??default,current?.fileName,current?.date??default))
+                                throw new InvalidOperationException("目标存档位已变化，新存档已另行保留，请刷新后检查。");
+                            await native.Edit("swap",saved.Key,target);
+                            if(replaced!=null)
+                            {
+                                native.Slots.TryGetValue(saved.Key,out var old);
+                                if(!ArchiveUiPolicy.TargetUnchanged(replaced.RevisionId,replaced.CreatedUtc,old?.fileName,old?.date??default))
+                                    throw new InvalidOperationException("旧存档位置已变化，已保留双方文件。");
+                                await native.Edit("delete",saved.Key,saved.Key,null);
+                            }
+                        }
+                        nativeDisplayPositions[target]=slot;
+                        if(this==null || closing)return;
+                        RefreshRecords();Status="原版存档已保存。";
+                    }
+                    catch(Exception ex){if(this!=null && !closing){RefreshRecords();Status="存档已保存，但排列更新失败："+ex.Message;}}
                     finally{busy=false;}
                 });
             }
@@ -345,13 +383,13 @@ namespace StudentAgeDialogueSave.UI
         void Load(DialogueUiRecord record)
         {
             if(!record.CanLoad){Status=record.StatusReason;return;}busy=true;
-            if(mode==3){view.CloseView();Game.LoadGame(record.RevisionId);return;}
+            if(NativeSlots){view.CloseView();Game.LoadGame(record.RevisionId);return;}
             service.Load(record.RevisionId,result=>{Result(result);if(result.Success)view.CloseView();});
         }
         async void Edit(int op,int from,DialogueUiRecord selected,int target,DialogueUiRecord destination,string note)
         {
             busy=true;string verb=new[]{"copy","swap","note","delete"}[op];
-            if(mode==3){try{int actualFrom=nativePositions[from],actualTarget=NativeTarget(target);if(!native.Slots.TryGetValue(actualFrom,out var current) || current.fileName!=selected.RevisionId || (destination!=null && (!native.Slots.TryGetValue(actualTarget,out var currentTarget) || currentTarget.fileName!=destination.RevisionId)))throw new InvalidOperationException("存档列表已变化，请重新选择。");await native.Edit(verb,actualFrom,actualTarget,note);if(op<2){nativeDisplayPositions[actualTarget]=target;if(destination!=null && op==1)nativeDisplayPositions[actualFrom]=from;}Result(new UiResult(true,"操作完成。"));}catch(Exception ex){Result(new UiResult(false,ex.Message));}return;}
+            if(NativeSlots){try{int actualFrom=nativePositions[from],actualTarget=NativeTarget(target);if(!native.Slots.TryGetValue(actualFrom,out var current) || current.fileName!=selected.RevisionId || (destination!=null && (!native.Slots.TryGetValue(actualTarget,out var currentTarget) || currentTarget.fileName!=destination.RevisionId)))throw new InvalidOperationException("存档列表已变化，请重新选择。");await native.Edit(verb,actualFrom,actualTarget,note);if(op<2){nativeDisplayPositions[actualTarget]=target;if(destination!=null && op==1)nativeDisplayPositions[actualFrom]=from;}Result(new UiResult(true,"操作完成。"));}catch(Exception ex){Result(new UiResult(false,ex.Message));}return;}
             int logical=destination?.Slot??target;
             if(destination==null && op<2)
             {
@@ -387,7 +425,31 @@ namespace StudentAgeDialogueSave.UI
         internal void RequestClose(){if(busy || AdvSettingsTransition.Active!=null)return;if(editor!=null)CloseEditor();else view.CloseView();}
         internal bool EditorOpen=>editor!=null;
         internal void CloseEditor(){if(editor==null || AdvSettingsTransition.Active!=null)return;var old=editor;editor=null;AdvSettingsTransition.Exit(()=>{old.SetActive(false);Destroy(old);},horizontal:true);}
-        void Update(){if(mode==3 && !closing)native.RequestGenderHeaders();if(dirty && !busy && editor==null)RefreshRecords();}
+        // Header completion changes metadata, not slot identity. Keep the Button and
+        // pointer target alive throughout async reads (no repeat hover sound/lost click).
+        void UpdateNativeHeaders()
+        {
+            dirty=false;if(!NativeSlots || closing)return;
+            for(int i=0;i<cards.Count;i++)
+            {
+                int slot=(page-1)*SlotsPerPage+i+1;
+                if(!nativePositions.TryGetValue(slot,out int actual) || !native.Slots.TryGetValue(actual,out var data))continue;
+                slots.TryGetValue(slot,out var previous);
+                var record=native.Record(data);slots[slot]=record;
+                var root=cards[i].transform;
+                var label=root.Find("Comment").GetComponent<TextMeshProUGUI>();
+                label.text=Caption(record);label.richText=record.Comment==null;
+                if(!detailed && (previous==null || previous.Gender!=record.Gender || previous.BackgroundId!=record.BackgroundId || previous.GradeState!=record.GradeState))
+                {
+                    SetPreview(root.Find("Saved background").GetComponent<Image>(),record);
+                    var chibi=root.Find("Speaker chibi");if(chibi!=null)SetChibi(chibi.GetComponent<Image>(),record);
+                    foreach(string name in new[]{"No image paper","No image","Student Age"})
+                    {var placeholder=root.Find(name);if(placeholder!=null)placeholder.gameObject.SetActive(!HasPreview(record));}
+                }
+            }
+            if(hoverSlot>0){slots.TryGetValue(hoverSlot,out var hovered);ShowDetail(hoverSlot,hovered);}
+        }
+        void Update(){if(dirty && !busy && editor==null)UpdateNativeHeaders();}
         internal void Close()
         {
             if(closing)return;closing=true;native.Changed=null;

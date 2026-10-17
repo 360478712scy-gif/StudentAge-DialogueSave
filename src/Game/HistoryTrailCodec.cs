@@ -17,7 +17,7 @@ namespace StudentAgeDialogueSave.GameIntegration
         const int MaximumExpandedBytes=384*1024*1024;
         // HistoryCheckpoint is sealed once published by DialogueHistory. Weak keys let
         // abandoned branches release their packed blocks; no Unity object enters this cache.
-        sealed class Packed { internal byte[] Previous; internal ConfigFingerprintSnapshot Config; internal string Value; }
+        sealed class Packed { internal object Previous; internal ConfigFingerprintSnapshot Config; internal string Value; }
         static readonly ConditionalWeakTable<HistoryCheckpoint,Packed> packed=new ConditionalWeakTable<HistoryCheckpoint,Packed>();
         internal static int LastEncodedBlocks {get;private set;}
         internal static string Encode(HistoryCheckpoint[] trail)
@@ -27,24 +27,25 @@ namespace StudentAgeDialogueSave.GameIntegration
             return Compress(writer=>{
                 writer.WriteStartObject();writer.WritePropertyName("version");writer.WriteValue(2);
                 writer.WritePropertyName("entries");writer.WriteStartArray();
-                byte[] previous=null;long expanded=0;
+                GameCheckpoint previousState=null;long expanded=0;
                 foreach(var checkpoint in trail)
                 {
                     var state=checkpoint.State;
-                    expanded+=state.WorldBytes.Length;
+                    expanded+=state.WorldLength;
                     if(expanded>MaximumExpandedBytes)throw new InvalidDataException("对话回看数据超出单文件安全解析范围。");
                     var block=packed.GetValue(checkpoint,_=>new Packed());
                     lock(block)
                     {
-                        if(block.Value==null || !ReferenceEquals(previous,block.Previous) || !ReferenceEquals(checkpoint.Config,block.Config))
+                        if(block.Value==null || !ReferenceEquals(previousState?.WorldIdentity,block.Previous) || !ReferenceEquals(checkpoint.Config,block.Config))
                         {
-                            var dialogue=(JObject)state.Dialogue.DeepClone();dialogue.Remove("historyTrail");
+                            var dialogue=state.MaterializeDialogue();dialogue.Remove("historyTrail");
                             if(checkpoint.Config!=null)dialogue["configDigest"]=checkpoint.Config.ComputeDigest();
-                            bool same=ReferenceEquals(previous,state.WorldBytes);
+                            bool same=ReferenceEquals(previousState?.WorldIdentity,state.WorldIdentity);
                             byte[] delta=null;
                             if(!same)
                             {
                                 delta=(byte[])state.WorldBytes.Clone();
+                                var previous=previousState?.WorldBytes;
                                 if(previous!=null)for(int i=0;i<Math.Min(delta.Length,previous.Length);i++)delta[i]^=previous[i];
                             }
                             block.Value=Compress(w=>{
@@ -54,11 +55,11 @@ namespace StudentAgeDialogueSave.GameIntegration
                                 if(!same){w.WritePropertyName("world");w.WriteValue(delta);}
                                 w.WriteEndObject();
                             });
-                            block.Previous=previous;block.Config=checkpoint.Config;LastEncodedBlocks++;
+                            block.Previous=previousState?.WorldIdentity;block.Config=checkpoint.Config;LastEncodedBlocks++;
                         }
                         writer.WriteValue(block.Value);
                     }
-                    previous=state.WorldBytes;
+                    previousState=state;
                 }
                 writer.WriteEndArray();writer.WriteEndObject();
             });
@@ -101,7 +102,7 @@ namespace StudentAgeDialogueSave.GameIntegration
             var data=Expand(encoded,ref budget);
             int version=data.Value<int>("version");
             if((version!=1 && version!=2) || !(data["entries"] is JArray entries))throw new InvalidDataException("未知回看数据格式。");
-            var result=new List<HistoryCheckpoint>();byte[] previous=null;long worldBytes=0;
+            var result=new List<HistoryCheckpoint>();byte[] previous=null;long worldBytes=0;CheckpointHistoryLog historyLog=null;
             foreach(var token in entries)
             {
                 var item=version==1?token as JObject:Expand((string)token,ref budget);
@@ -115,7 +116,10 @@ namespace StudentAgeDialogueSave.GameIntegration
                 if(version==2 && !same && previous!=null)for(int i=0;i<Math.Min(world.Length,previous.Length);i++)world[i]^=previous[i];
                 var brief=item["brief"]?.ToObject<CheckpointBrief>();
                 if(brief==null)throw new InvalidDataException("回看周目信息缺失。");
-                result.Add(new HistoryCheckpoint{State=new GameCheckpoint{Dialogue=dialogue,WorldBytes=world,Brief=brief}});previous=world;
+                historyLog=CheckpointHistoryLog.Capture((JArray)dialogue["history"],historyLog);dialogue["history"]=new JArray();
+                var state=new GameCheckpoint{Dialogue=dialogue,WorldBytes=world,Brief=brief,NativeHistory=historyLog};
+                if(same)state.ShareHistoryWorld(result[result.Count-1].State);else state.PackHistoryWorld();
+                result.Add(new HistoryCheckpoint{State=state});previous=world;
             }
             return result.ToArray();
         }

@@ -38,9 +38,10 @@ namespace StudentAgeDialogueSave.UI
         private int generation;
         private bool busy;
         private bool entered;
+        private bool saving;
+        private bool SaveMode => entered ? saving : view.isSaveMode;
         private bool disposed;
         private bool ownsMenu;
-        private bool returnToDialogue;
         private string pendingSaveKey;
         private string operationError;
 
@@ -59,6 +60,7 @@ namespace StudentAgeDialogueSave.UI
             IgnoreLayout(entry.transform);
         }
 
+        internal void RequestClose(){if(!busy && !disposed)view.CloseView();}
         internal bool IsEntered { get { return entered; } }
         internal bool OwnsMenuLease { get { return ownsMenu; } }
 
@@ -77,9 +79,8 @@ namespace StudentAgeDialogueSave.UI
         internal bool OnNativeTabSelected(UIToggleGroup group)
         {
             if (!entered || group != view.tabgroup_top) return true;
-            // Only saving is confined to dialogue slots. Native load categories share
-            // this window's pause lease until cancellation or native world loading closes it.
-            if (view.isSaveMode && returnToDialogue) { UIMgr.CloseView(view); return false; }
+            // The native host stays in load mode during dialogue, including when
+            // leaving a dialogue-save subpage to browse native categories.
             Leave(keepMenu: !view.isSaveMode);
             return true;
         }
@@ -130,18 +131,17 @@ namespace StudentAgeDialogueSave.UI
             return Rect.MinMaxRect(points.Min(p => p.x), points.Min(p => p.y), points.Max(p => p.x), points.Max(p => p.y));
         }
 
-        internal void Enter(bool menuAlreadyBegun)
+        internal void Enter(bool menuAlreadyBegun,bool? savingRequest=null)
         {
             if (disposed || entered) return;
+            saving=savingRequest??view.isSaveMode;
             string reason;
-            if (!menuAlreadyBegun && !ownsMenu && !service.BeginMenu(view.isSaveMode, out reason))
+            if (!menuAlreadyBegun && !ownsMenu && !service.BeginMenu(saving, out reason))
             {
                 service.Notify(reason);
                 return;
             }
             ownsMenu = true;
-            // A toolbar save is not an alternative way around the game's enableSave gate.
-            returnToDialogue = menuAlreadyBegun && view.isSaveMode;
             try
             {
                 BuildPage();
@@ -196,7 +196,7 @@ namespace StudentAgeDialogueSave.UI
             }
 
             // Saving has only manual dialogue slots; reading exposes separate secondary categories.
-            if (!view.isSaveMode)
+            if (!saving)
             {
                 var top = Own(NativeUiCloner.EmptyContainer(view.tabgroup_top.transform, "DialogueSave.Categories"));
                 top.SetActive(true);
@@ -218,7 +218,7 @@ namespace StudentAgeDialogueSave.UI
             totalPageText = CloneText(view.txt_page_total, "DialogueSave.TotalPages");
             previous = NativeUiCloner.CloneButton(view.btn_prev, "DialogueSave.Previous", () => Move(-1));
             next = NativeUiCloner.CloneButton(view.btn_next, "DialogueSave.Next", () => Move(1));
-            commit = NativeUiCloner.CloneButton(view.isSaveMode ? view.btn_save : view.btn_load,
+            commit = NativeUiCloner.CloneButton(saving ? view.btn_save : view.btn_load,
                 "DialogueSave.Commit", Commit);
             Own(previous.gameObject); Own(next.gameObject); Own(commit.gameObject);
         }
@@ -239,7 +239,7 @@ namespace StudentAgeDialogueSave.UI
             if (!entered || disposed) return;
             IReadOnlyList<DialogueUiRecord> records = service.List(category) ?? new DialogueUiRecord[0];
             items = new List<SlotItem>();
-            if (category == DialogueUiCategory.Manual && view.isSaveMode)
+            if (category == DialogueUiCategory.Manual && saving)
             {
                 var recordsBySlot = records.ToLookup(x => x.Slot);
                 for (int slot = 1; slot <= 99; slot++)
@@ -298,13 +298,13 @@ namespace StudentAgeDialogueSave.UI
             card.txt_idx.text = item.Slot > 0 ? item.Slot.ToString(CultureInfo.InvariantCulture) : "-";
             card.btn_click.gameObject.SetActive(record != null);
             card.btn_add.gameObject.SetActive(record == null);
-            card.txt_add.gameObject.SetActive(view.isSaveMode && category == DialogueUiCategory.Manual);
+            card.txt_add.gameObject.SetActive(saving && category == DialogueUiCategory.Manual);
             bool isSelected = selected != null && selected.Slot == item.Slot &&
                 (selected.Record == null ? record == null : record != null && selected.Record.RevisionId == record.RevisionId);
             // Native DisabledColor shows the yellow selection frame. Disabling every
             // slot during an async save would therefore highlight the entire grid.
             // Handlers guard busy; only the actual selected slot uses native disabled styling.
-            card.btn_add.interactable = view.isSaveMode && category == DialogueUiCategory.Manual && !isSelected;
+            card.btn_add.interactable = saving && category == DialogueUiCategory.Manual && !isSelected;
             card.btn_click.interactable = !isSelected;
             if (record == null)
             {
@@ -354,7 +354,7 @@ namespace StudentAgeDialogueSave.UI
 
         private void Create(int index)
         {
-            if (disposed || !entered || busy || !view.isSaveMode || category != DialogueUiCategory.Manual) return;
+            if (disposed || !entered || busy || !saving || category != DialogueUiCategory.Manual) return;
             var item = ItemAt(index);
             if (item == null || item.Record != null) return;
             Select(index);
@@ -366,20 +366,20 @@ namespace StudentAgeDialogueSave.UI
         private void RefreshSelection()
         {
             string reason = "";
-            if (view.isSaveMode && category != DialogueUiCategory.Manual)
+            if (saving && category != DialogueUiCategory.Manual)
                 reason = "自动与快速存档由系统管理，请切换手动存档保存。";
             var record = selected == null ? null : selected.Record;
             bool canReplace = record == null || (record.CanLoad && !record.IsConflict);
-            commit.interactable = selected != null && (view.isSaveMode ?
+            commit.interactable = selected != null && (saving ?
                 category == DialogueUiCategory.Manual && canReplace : record != null && record.CanLoad);
             string prefix = "对话存档 · " + CategoryName(category);
             if (!string.IsNullOrEmpty(operationError)) currentText.text = operationError;
             else if (!string.IsNullOrEmpty(service.StatusMessage)) currentText.text = service.StatusMessage;
-            else if (view.isSaveMode && service.IsPreparingSave)
+            else if (saving && service.IsPreparingSave)
                 currentText.text = busy ? "已受理，正在准备存档…" : "正在准备存档…";
             else if (service.IsListing) currentText.text = "正在读取存档…";
             else if (busy) currentText.text = "正在处理，请稍候…";
-            else if (view.isSaveMode && !string.IsNullOrEmpty(reason)) currentText.text = prefix + " · " + reason;
+            else if (saving && !string.IsNullOrEmpty(reason)) currentText.text = prefix + " · " + reason;
             else if (record != null && !record.CanLoad) currentText.text = prefix + " · " + record.StatusReason;
             else if (record != null && record.IsConflict) currentText.text = prefix + " · 分叉版本，请核对时间和台词后选择读取；不会自动覆盖。";
             else if (record != null) currentText.text = prefix + " · " + record.Speaker + "：" + record.Summary;
@@ -399,7 +399,7 @@ namespace StudentAgeDialogueSave.UI
         {
             if (selected == null || !commit.interactable) return;
             var target = selected;
-            if (view.isSaveMode)
+            if (saving)
             {
                 string key = target.Slot + ":" + (target.Record == null ? "" : target.Record.RevisionId);
                 Action write = () =>
@@ -478,7 +478,6 @@ namespace StudentAgeDialogueSave.UI
         {
             ++generation;
             entered = false;
-            returnToDialogue = false;
             busy = false;
             foreach (var obj in pageObjects) NativeUiCloner.Remove(obj);
             pageObjects.Clear(); cards.Clear(); tabs.Clear();
@@ -580,7 +579,7 @@ namespace StudentAgeDialogueSave.UI
                 });
             var report = new JObject
             {
-                ["saving"] = view.isSaveMode,
+                ["saving"] = SaveMode,
                 ["layer"] = view.layerType.ToString(),
                 ["dialoguePageOpen"] = entered,
                 ["ownsMenuLease"] = ownsMenu,

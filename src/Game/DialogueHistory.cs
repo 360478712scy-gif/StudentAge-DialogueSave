@@ -56,8 +56,8 @@ namespace StudentAgeDialogueSave.GameIntegration
                     (string)data["segments"][segment];
                 Entries.Add(new Entry{Checkpoint=checkpoint,Speaker=option?"选项":checkpoint.State.Brief.Speaker,
                     Text=text,TalkId=data.Value<int>("talkId"),Segment=segment,
-                    NativeCount=((Newtonsoft.Json.Linq.JArray)data["history"]).Count,IsOption=option});
-                bytes+=checkpoint.State.WorldBytes.Length;
+                    NativeCount=checkpoint.State.HistoryCount,IsOption=option});
+                bytes+=checkpoint.State.WorldLength;
             }
             Revision++;Changed?.Invoke();
         }
@@ -85,11 +85,6 @@ namespace StudentAgeDialogueSave.GameIntegration
             try
             {
                 var checkpoint=adapter.CaptureHistory();
-                // Reuse an immutable byte buffer only after full byte equality. Effects,
-                // random state and presentation are still captured at every boundary.
-                var previous=Entries.Count==0?null:Entries[Entries.Count-1].Checkpoint.State.WorldBytes;
-                if(previous!=null && previous.Length==checkpoint.State.WorldBytes.Length &&
-                    SameBytes(previous,checkpoint.State.WorldBytes))checkpoint.State.WorldBytes=previous;
                 lastTalk=cfg.id;lastSegment=view.tmpTalkIdx;lastCount=count;lastPhase=phase;
                 LastCaptureMilliseconds=checkpoint.CaptureMilliseconds;
                 lastFailure=null;
@@ -97,13 +92,13 @@ namespace StudentAgeDialogueSave.GameIntegration
                 // Preserve the spoken line and its subsequent choices as separate
                 // destinations. Phase updates may replace only the same destination.
                 if(Entries.Count>0 && Entries[Entries.Count-1].NativeCount==count && Entries[Entries.Count-1].IsOption==option)
-                {bytes-=Entries[Entries.Count-1].Checkpoint.State.WorldBytes.Length;Entries.RemoveAt(Entries.Count-1);}
+                {bytes-=Entries[Entries.Count-1].Checkpoint.State.WorldLength;Entries.RemoveAt(Entries.Count-1);}
                 string text=option?string.Join("\n",view.itemgroup_options.GetCells().OrderBy(c=>c.cellIdx)
                     .Select(c=>c.data as CommonEvtOptionData).Where(o=>o!=null)
                     .Select(o=>Config.Cfg.OptionCfgMap.TryGetValue(o.id,out var choice)?choice.content:"")):view.tmpTalks[view.tmpTalkIdx];
                 Entries.Add(new Entry { Speaker=option?"选项":checkpoint.State.Brief.Speaker,Text=text,IsOption=option,
                     TalkId=cfg.id,Segment=view.tmpTalkIdx,NativeCount=count,Checkpoint=checkpoint });
-                bytes+=checkpoint.State.WorldBytes.Length;
+                bytes+=checkpoint.State.WorldLength;
                 // No age/count/byte eviction: visible earlier records keep their complete state.
                 Revision++;Changed?.Invoke();
             }
@@ -116,7 +111,7 @@ namespace StudentAgeDialogueSave.GameIntegration
             try
             {
                 await adapter.RestoreHistoryAsync(selected.Checkpoint,shutdown);
-                while(Entries.Count>index+1){bytes-=Entries[Entries.Count-1].Checkpoint.State.WorldBytes.Length;Entries.RemoveAt(Entries.Count-1);}
+                while(Entries.Count>index+1){bytes-=Entries[Entries.Count-1].Checkpoint.State.WorldLength;Entries.RemoveAt(Entries.Count-1);}
                 owner=UIMgr.GetView<NewTalkView>(false) as NewTalkView;
                 lastTalk=selected.TalkId;lastSegment=selected.Segment;lastPhase=owner.talkState.ToString();
                 lastCount=(AccessTools.Field(typeof(NewTalkView),"historys").GetValue(owner) as List<TalkData>)?.Count??0;
@@ -124,8 +119,6 @@ namespace StudentAgeDialogueSave.GameIntegration
             }
             finally{Restoring=false;}
         }
-        static bool SameBytes(byte[] left,byte[] right)
-        {for(int i=0;i<left.Length;i++)if(left[i]!=right[i])return false;return true;}
-        internal void Clear(){Revision++;Entries.Clear();bytes=0;lastTalk=lastSegment=lastCount=-1;lastPhase=null;owner=null;}
+        internal void Clear(){Revision++;Entries.Clear();adapter.ResetHistoryCapture();bytes=0;lastTalk=lastSegment=lastCount=-1;lastPhase=null;owner=null;}
     }
 }

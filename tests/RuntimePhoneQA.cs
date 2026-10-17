@@ -16,6 +16,8 @@ using StudentAgeDialogueSave.UI;
 // Phone calls: fast-forward passes through them; scene skip from inside a call ends the call first.
 internal static class RuntimePhoneQA
 {
+    static readonly List<int> phoneSounds=new List<int>();
+    static void PhoneSound(int _id){if(_id==42035 || _id==42036)phoneSounds.Add(_id);}
     public static IEnumerator Run(DialogueCheckpointAdapter adapter,Action<bool,string> check,Func<Func<bool>,float,string,IEnumerator> until,string root)
     {
         var b=Cfg.TalkCfgMap[1900000001];var log=new List<string>();
@@ -26,7 +28,7 @@ internal static class RuntimePhoneQA
         Line(1900000304,"电话挂断了。",null,1900000305);
         Line(1900000305,"挂了电话，回到教室。",null,1900000306);
         // Copy a real native call-start line (its effect parameters, roles and highlights).
-        var native=Cfg.TalkCfgMap.Values.First(t=>t.screenEffect!=null && t.screenEffect.Count>=3 && t.screenEffect[0]>=4001f && t.screenEffect[0]<=4019f && Cfg.BgCfgMap.ContainsKey((int)t.screenEffect[1]) && Cfg.PersonCfgMap.ContainsKey((int)t.screenEffect[2]) && t.roleIds!=null && t.roleIds.Count>0);
+        var native=Cfg.TalkCfgMap.Values.First(t=>t.screenEffect!=null && t.screenEffect.Count>=3 && t.screenEffect[0]==4007f && Cfg.BgCfgMap.ContainsKey((int)t.screenEffect[1]) && Cfg.PersonCfgMap.ContainsKey((int)t.screenEffect[2]) && t.roleIds!=null && t.roleIds.Count>0);
         float callEffect=native.screenEffect[0];
         var start=(TalkCfg)typeof(object).GetMethod("MemberwiseClone",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic).Invoke(native,null);
         start.id=1900000302;start.content="喂？是我。";start.nextTalk=new List<int>{1900000303};start.option=new List<int>();start.miniGame?.Clear();start.effect=new List<List<float>>();Cfg.TalkCfgMap[start.id]=start;
@@ -47,7 +49,7 @@ internal static class RuntimePhoneQA
             Cfg.OptionCfgMap[1900000001].talkId=new List<int>{1900000301};
             foreach(int id in new[]{1900000301,1900000302,1900000303})
             {
-                yield return until(()=>talk()!=null && talk().talkState==TalkState.AnimEnd && !(bool)AccessTools.Field(typeof(NewTalkView),"isDelaying").GetValue(talk()),20,"stable before "+id);
+                yield return until(()=>talk()!=null && talk().talkState==TalkState.AnimEnd && adapter.CanAdvancePresentation(talk()) && !(bool)AccessTools.Field(typeof(NewTalkView),"isDelaying").GetValue(talk()),20,"stable before "+id);
                 talk().OnClickNext();
                 yield return until(()=>current()==id && talk().talkState==TalkState.AnimEnd,20,"reached "+id);
             }
@@ -61,7 +63,17 @@ internal static class RuntimePhoneQA
                 File.WriteAllText(Path.Combine(root,"results/phone-baseline.txt"),reason);
                 yield break;
             }
+            // The dialogue skin may move text, never phone participant geometry.
+            var advGeometry=Geometry(talk());
+            adv.SelectMode("Original");yield return new WaitForSecondsRealtime(.6f);
+            var nativeGeometry=Geometry(talk());
+            check(Newtonsoft.Json.Linq.JToken.DeepEquals(advGeometry,nativeGeometry),"phone role geometry is identical in Original and ADV");
+            File.WriteAllText(Path.Combine(root,"results/phone-geometry-parity.json"),new Newtonsoft.Json.Linq.JObject{["adv"]=advGeometry,["original"]=nativeGeometry}.ToString());
+            yield return new WaitForEndOfFrame();ScreenCapture.CaptureScreenshot(Path.Combine(root,"results/phone-original.png"));yield return new WaitForSecondsRealtime(.3f);
+            adv.SelectMode("ADV");yield return new WaitForSecondsRealtime(.6f);
+            yield return new WaitForEndOfFrame();ScreenCapture.CaptureScreenshot(Path.Combine(root,"results/phone-adv.png"));yield return new WaitForSecondsRealtime(.3f);
             yield return Roundtrip(adapter,check,until,root,talk,current,phone,hiddenRoles);
+            check(Newtonsoft.Json.Linq.JToken.DeepEquals(advGeometry,Geometry(talk())),"phone roles keep original geometry through save/load");
 
             AccessTools.Method(typeof(AdvDialogueController),"BeginSceneSkip").Invoke(adv,null);
             for(int wait=0;wait<60 && !(talk()!=null && current()==1900000306 && talk().talkState==TalkState.Option);wait++)
@@ -72,6 +84,8 @@ internal static class RuntimePhoneQA
             }
             yield return new WaitForSecondsRealtime(1f);
             log.Add("scene skip at "+current()+" phone="+phone()+" hiddenRoles="+hiddenRoles());
+            check(current()==1900000306 && talk().talkState==TalkState.Option,"phone scene skip reaches choices rather than stalling");
+            foreach(int id in new[]{1900000303,1900000304,1900000305})check(Singleton<GlobalMgr>.Ins.HasSeenTalk(id),"skipped phone line is read: "+id);
             check(!phone(),"scene skip from inside a call ends the call");
             check(hiddenRoles()==0,"no character left hidden after skipping a call");
             yield return new WaitForEndOfFrame();ScreenCapture.CaptureScreenshot(Path.Combine(root,"results/phone-after-skip.png"));yield return new WaitForSecondsRealtime(.5f);
@@ -83,8 +97,55 @@ internal static class RuntimePhoneQA
             yield return new WaitForSecondsRealtime(1f);
             log.Add("fast-forward reached choice; phone="+phone()+" hiddenRoles="+hiddenRoles());
             check(!phone() && hiddenRoles()==0,"after fast-forward the call has ended and roles are visible");
+            // Skip before dialling, during the split-screen animation, and while
+            // hanging up. Duplicate requests must not restart either phone effect.
+            var confirm=ConfirmationOptions.Entry(adv.Configuration,"Skip");bool priorConfirm=confirm.Value;
+            var soundProbe=new Harmony("qa.phone.skip-boundary-sounds");
+            soundProbe.Patch(AccessTools.Method(typeof(AudioMgrEx),"PlayUISound",new[]{typeof(int),typeof(float)}),prefix:new HarmonyMethod(typeof(RuntimePhoneQA),nameof(PhoneSound)));
+            try
+            {
+                confirm.Value=false;
+                foreach(string phase in new[]{"before-dial","dial-animation","hangup-animation"})
+                {
+                    phoneSounds.Clear();
+                    RuntimeUiQA.Click("ADV.Choice.0",check);
+                    yield return until(()=>current()==1900000301 && talk().talkState==TalkState.AnimEnd,20,phase+" begins before call");
+                    if(phase!="before-dial")
+                    {
+                        talk().OnClickNext();
+                        yield return until(()=>current()==1900000302 && talk().talkState==TalkState.Anim,20,phase+" reaches dial animation");
+                        if(phase=="hangup-animation")
+                        {
+                            foreach(int id in new[]{1900000303,1900000304})
+                            {
+                                yield return until(()=>talk().talkState==TalkState.AnimEnd && !(bool)AccessTools.Field(typeof(NewTalkView),"isDelaying").GetValue(talk()),20,"stable before boundary "+id);
+                                talk().OnClickNext();
+                                yield return until(()=>current()==id && talk().talkState==TalkState.Anim,20,"reached boundary "+id);
+                            }
+                        }
+                    }
+                    for(int press=0;press<3;press++)AccessTools.Method(typeof(AdvDialogueController),"RequestSceneSkip").Invoke(adv,null);
+                    yield return until(()=>current()==1900000306 && talk().talkState==TalkState.Option,25,phase+" skip reaches choice without stall");
+                    yield return new WaitForSecondsRealtime(.4f);
+                    check(!phone() && hiddenRoles()==0 && !(bool)AccessTools.Field(typeof(AdvDialogueController),"sceneSkipPending").GetValue(adv),phase+" cleans phone participants and pending state");
+                    check(phoneSounds.Count(id=>id==42035)==1 && phoneSounds.Count(id=>id==42036)==1,phase+" plays dial and hangup exactly once despite repeated requests");
+                    log.Add(phase+" passed; sounds="+string.Join(",",phoneSounds));
+                }
+            }
+            finally{soundProbe.UnpatchSelf();confirm.Value=priorConfirm;}
         }
         finally{adv.Preferences.SkipUnread.Value=unread;File.WriteAllLines(Path.Combine(root,"results/phone.txt"),log);}
+    }
+    static Newtonsoft.Json.Linq.JObject Geometry(NewTalkView view)
+    {
+        var result=new Newtonsoft.Json.Linq.JObject();
+        foreach(var pair in (Dictionary<int,NewTalkRoleData>)AccessTools.Field(typeof(NewTalkView),"roles").GetValue(view))
+        {
+            var r=pair.Value;if(r.cell==null)continue;
+            var pos=r.cell.transform.anchoredPosition3D;var scale=r.cell.transform.localScale;
+            result[pair.Key.ToString()]=new Newtonsoft.Json.Linq.JObject{["x"]=Math.Round(pos.x,1),["y"]=Math.Round(pos.y,1),["scaleX"]=Math.Round(scale.x,2),["scaleY"]=Math.Round(scale.y,2),["phone"]=(int)r.phoneState};
+        }
+        return result;
     }
     static IEnumerator Roundtrip(DialogueCheckpointAdapter adapter,Action<bool,string> check,Func<Func<bool>,float,string,IEnumerator> until,string root,
         Func<NewTalkView> talk,Func<int> current,Func<bool> phone,Func<int> hiddenRoles)

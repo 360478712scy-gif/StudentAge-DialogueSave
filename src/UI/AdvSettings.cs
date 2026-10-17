@@ -31,7 +31,8 @@ namespace StudentAgeDialogueSave.UI
         readonly List<GameObject> originals=new List<GameObject>();
         readonly List<Button> tabs=new List<Button>();
         IDisposable pause;
-        bool closed,watermark,unread;
+        bool closed,watermark,unread,originalDialogueFont;
+        AdvArchiveScope archiveScope;
         Dictionary<string,bool> confirmations;
         readonly HashSet<string> confirmationDirty=new HashSet<string>();
         bool resetNativeConfirmations;
@@ -52,6 +53,7 @@ namespace StudentAgeDialogueSave.UI
             result.optionsSignature=signature;result.view=view;result.owner=owner;result.font=font;result.pause=pause;
             result.confirmations=ConfirmationOptions.Snapshot(owner.Configuration);result.resetNativeConfirmations=false;result.confirmationDirty.Clear();
             var p=owner.Preferences;result.watermark=p.Watermark.Value;result.unread=p.SkipUnread.Value;
+            result.originalDialogueFont=p.OriginalDialogueFont.Value;result.archiveScope=p.ArchiveScope.Value;
             result.mode=owner.Mode;result.volume=p.ButtonVolume.Value;result.textSpeed=p.TextSpeed.Value;result.autoSpeed=p.AutoSpeed.Value;
             // Preserve the original hierarchy for future opens/unloading.
             foreach(Transform child in view.gameObject.transform)if(child.gameObject.activeSelf){result.originals.Add(child.gameObject);child.gameObject.SetActive(false);}
@@ -100,6 +102,7 @@ namespace StudentAgeDialogueSave.UI
             Canvas.ForceUpdateCanvases();
             AdvSettingsTransition.Play(snapshot,true,()=>{if(!closed)transitionBusy=false;},true);
         }
+        internal void RequestCancel()=>RequestClose(()=>view.CloseView());
         void RequestClose(Action action)
         {
             if(transitionBusy || closed)return;
@@ -202,12 +205,18 @@ namespace StudentAgeDialogueSave.UI
             Choice(Card("对话界面风格",1,y),new[]{"原版","ADV"},()=>mode=="ADV"?1:0,n=>{mode=n==1?"ADV":"Original";ShowTab(3);});
             Range(Card("按钮音效音量",0,y+172),"ButtonVolume",0,100,volume*100,n=>{volume=n/100;AdvSkin.ButtonVolume=volume;},n=>Mathf.RoundToInt(n)+"",true,()=>volume*100);
             Choice(Card("跳过文本范围",1,y+172),new[]{"仅已读文本","全部文本"},()=>unread?1:0,n=>{unread=n==1;ShowTab(3);});
-            var text=Card("文本浮现速度",0,y+344,388);
+            Choice(Card("对话字体",0,y+344),new[]{"模组字体","原版字体"},()=>originalDialogueFont?1:0,n=>{originalDialogueFont=n==1;ShowTab(3);});
+            Choice(Card("ADV 存档界面",1,y+344),new[]{"全局启用","仅对话中启用","不启用"},()=>(int)archiveScope,n=>{archiveScope=(AdvArchiveScope)n;ShowTab(3);});
+            var text=Card("文本浮现速度",0,y+516,224);
             Range(text,"TextSpeed",5,80,textSpeed,n=>{textSpeed=n;previewStart=Time.unscaledTime;},n=>Mathf.RoundToInt(n)+"",false,()=>textSpeed);
             typingPreview=Preview(text,"文本浮现预览");
-            var auto=Card("自动阅读速度",1,y+344,388);
+            var auto=Card("自动阅读速度",1,y+516,224);
             Range(auto,"AutoSpeed",0,100,autoSpeed,n=>{autoSpeed=n;previewStart=Time.unscaledTime;},n=>Mathf.RoundToInt(n)+"",false,()=>autoSpeed);
             autoPreview=Preview(auto,"自动翻句预览");cachedTyping=typingPreview;cachedAuto=autoPreview;previewStart=Time.unscaledTime;
+            bindings[3].Add(()=>{
+                var selectedFont=owner.DialogueFont(originalDialogueFont);
+                foreach(var preview in new[]{cachedTyping,cachedAuto})if(preview!=null && selectedFont!=null){preview.font=selectedFont;preview.fontSharedMaterial=AdvWidgets.Outline(selectedFont);}
+            });
         }
         void SetAllConfirmations(bool enabled)
         {
@@ -241,8 +250,8 @@ namespace StudentAgeDialogueSave.UI
         {var hint=target.AddComponent<SettingsHelpTarget>();hint.Help=help;hint.Description=description;}
         TextMeshProUGUI Preview(Transform card,string title)
         {
-            Label(title,card,94,185,688,28,18,Blue);
-            var label=Label(Sample,card,94,225,688,95,22,Navy);label.enableWordWrapping=true;return label;
+            Label(title,card,94,136,688,24,18,Blue);
+            var label=Label(Sample,card,94,164,688,50,22,Navy);label.enableWordWrapping=true;return label;
         }
         static float ChoiceHeight(int count)=>Mathf.Max(164,80+Mathf.Ceil(count/4f)*60+14);
         void Choice(Transform card,string[] names,Func<int> selected,Action<int> action)
@@ -297,13 +306,14 @@ namespace StudentAgeDialogueSave.UI
         {
             if(Tab==4){AdvConfirmation.Show(font,"恢复默认","将所有执行确认恢复为 ON 吗？",()=>SetAllConfirmations(true));return;}
             AdvConfirmation.Show(font,"恢复默认","恢复模组默认设置吗？",()=>{
-                watermark=true;unread=false;mode="ADV";volume=.8f;textSpeed=30;autoSpeed=49;
+                watermark=true;unread=false;originalDialogueFont=false;archiveScope=AdvArchiveScope.DialogueOnly;mode="ADV";volume=.8f;textSpeed=30;autoSpeed=49;
                 AdvSkin.ButtonVolume=volume;previewStart=Time.unscaledTime;ShowTab(0);
             });
         }
         void Apply()
         {
             var p=owner.Preferences;p.Watermark.Value=watermark;p.SkipUnread.Value=unread;p.ButtonVolume.Value=volume;p.TextSpeed.Value=textSpeed;p.AutoSpeed.Value=autoSpeed;
+            p.OriginalDialogueFont.Value=originalDialogueFont;p.ArchiveScope.Value=archiveScope;
             var changed=new Dictionary<string,bool>();foreach(string key in confirmationDirty)changed[key]=confirmations[key];
             ConfirmationOptions.Apply(owner.Configuration,changed,resetNativeConfirmations);
             owner.SelectMode(mode);owner.ApplyPreferences();Invoke("OnClickConfirm");

@@ -17,7 +17,7 @@ def main():
         raise SystemExit("Install the .NET 9 SDK and add dotnet to PATH.")
     for script in (ROOT / "tools").glob("*.py"):
         ast.parse(script.read_text(encoding="utf-8"), filename=str(script))
-    for project in ("tests/StorageTests.csproj", "tests/ConfigFingerprintCheck/Check.csproj", "tests/HistoryTrailCheck/Check.csproj"):
+    for project in ("tests/StorageTests.csproj", "tests/ConfigFingerprintCheck/Check.csproj", "tests/HistoryTrailCheck/Check.csproj", "tests/ArchivePolicyCheck/Check.csproj"):
         subprocess.run([dotnet, "run", "--project", str(ROOT / project), "--configuration", "Release"], cwd=ROOT, check=True)
     print("ALL_INDEPENDENT_CHECKS_PASSED")
 

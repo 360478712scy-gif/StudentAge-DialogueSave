@@ -31,6 +31,8 @@ namespace StudentAgeDialogueSave.UI
         private readonly IDialogueUiService service;
         private readonly Action<string> log;
         private readonly Dictionary<SaveView,bool> loadingDefaults=new Dictionary<SaveView,bool>();
+        private readonly Dictionary<SaveView,Tuple<AnimeType,AnimeType>> animationDefaults=new Dictionary<SaveView,Tuple<AnimeType,AnimeType>>();
+        private readonly Dictionary<SaveView,bool> requestedSaving=new Dictionary<SaveView,bool>();
         private readonly HashSet<SaveView> originalArchives = new HashSet<SaveView>();
         private readonly Dictionary<SaveView, AdvSavePage> advPages = new Dictionary<SaveView, AdvSavePage>();
         private readonly Dictionary<SaveView, DialogueSavePage> pages = new Dictionary<SaveView, DialogueSavePage>();
@@ -39,6 +41,7 @@ namespace StudentAgeDialogueSave.UI
         private Harmony harmony;
         private bool disposed;
         private bool pendingMenu;
+        private bool pendingSaving;
         private float pendingSince;
         private float nextReconcile;
         private DialogueHotkeyBindings bindings;
@@ -90,6 +93,8 @@ namespace StudentAgeDialogueSave.UI
                 harmony.Patch(constructor,postfix:new HarmonyMethod(constructorPatch));patches.Add(Tuple.Create((MethodBase)constructor,constructorPatch));
                 Patch(typeof(UIMgr),"GetView",nameof(ArchiveRetrieved),false,new[]{typeof(string)});
                 Patch(typeof(SaveView), "OnOpen", nameof(SaveOpened), false);
+                Patch(typeof(SaveView), "OnOpen", nameof(SaveOpening), true);
+                Patch(typeof(SaveView), "SaveGame", nameof(NativeSavePrefix), true);
                 Patch(typeof(SaveView), "Refresh", nameof(SaveRefreshed), false);
                 Patch(typeof(SaveView), "Refresh", nameof(SaveRefreshPrefix), true);
                 Patch(typeof(UIToggleGroup), "Select", nameof(NativeTabSelected), true, new[] { typeof(object), typeof(UICell) });
@@ -122,6 +127,11 @@ namespace StudentAgeDialogueSave.UI
         public void Open(bool saving)
         {
             if (disposed) return;
+            if (!service.IsDialogueContext)
+            {
+                UIMgr.OpenView<SaveView>(UILayerType.None, null, new object[] { saving });
+                return;
+            }
             // Do not restart the menu transaction on a repeated toolbar click: BeginMenu
             // owns the capture generation and restarting it would cancel an accepted save.
             if (pendingMenu || advPages.Count>0 || pages.Values.Any(x => x.IsEntered || x.OwnsMenuLease))
@@ -129,8 +139,9 @@ namespace StudentAgeDialogueSave.UI
                 return;
             }
             string reason;
-            if (!service.BeginMenu(AdvDialogueController.Active?.IsAdv==true ? false : saving, out reason)) { service.Notify(reason); return; }
+            if (!service.BeginMenu(WantsAdvArchive ? false : saving, out reason)) { service.Notify(reason); return; }
             pendingMenu = true;
+            pendingSaving = saving;
             pendingSince = Time.realtimeSinceStartup;
             try
             {
@@ -154,6 +165,12 @@ namespace StudentAgeDialogueSave.UI
         }
 
         // The persistent host calls this cheaply; no resource scan or UI rebuild occurs every frame.
+        internal bool HasArchiveOnTop => UIMgr.GetTopView(ViewType.Guide,ViewType.Side) is SaveView view && pages.ContainsKey(view);
+        internal void CloseArchiveOnTop()
+        {
+            if(UIMgr.GetTopView(ViewType.Guide,ViewType.Side) is SaveView view && pages.TryGetValue(view,out var page))page.RequestClose();
+        }
+
         public void Tick()
         {
             if (disposed || !IsUiReady()) return;
@@ -257,7 +274,7 @@ namespace StudentAgeDialogueSave.UI
             UpdateDuplicateRows();
             // Covers native menu/title entries and an already-open save view
             // after switching styles; use the registry, never a scene scan.
-            if(AdvDialogueController.Active?.IsAdv==true)
+            if(WantsAdvArchive)
             {
                 var openSave=UIMgr.GetView<SaveView>(false) as SaveView;
                 if(openSave!=null && openSave.isViewReady && openSave.gameObject.activeInHierarchy && !advPages.ContainsKey(openSave) && !originalArchives.Contains(openSave))Guard(()=>Attach(openSave));
@@ -408,13 +425,14 @@ namespace StudentAgeDialogueSave.UI
         private void Attach(SaveView view)
         {
             if (disposed || view == null || view.gameObject == null || originalArchives.Contains(view)) return;
-            if(AdvDialogueController.Active?.IsAdv==true && service is DialogueSaveService archive)
+            if(UseAdvArchive(view) && service is DialogueSaveService archive)
             {
                 if(!advPages.ContainsKey(view))
                 {
                     if(!pendingMenu && !service.BeginMenu(false,out string reason)){service.Notify(reason);return;}
                     if(pages.TryGetValue(view,out var originalPage)){pages.Remove(view);originalPage.Dispose();if(!service.BeginMenu(false,out reason)){service.Notify(reason);return;}}
-                    pendingMenu=false;advPages.Add(view,AdvSavePage.Open(view,archive));
+                    bool saving=requestedSaving.TryGetValue(view,out bool request)?request:view.isSaveMode;
+                    pendingMenu=false;advPages.Add(view,AdvSavePage.Open(view,archive,saving));
                 }
                 return;
             }
@@ -427,7 +445,7 @@ namespace StudentAgeDialogueSave.UI
             if (pendingMenu)
             {
                 pendingMenu = false;
-                page.Enter(true);
+                page.Enter(true,pendingSaving);
             }
             else page.PositionEntry();
         }
@@ -512,9 +530,9 @@ namespace StudentAgeDialogueSave.UI
         {
             var save = view as SaveView;
             if(save!=null && originalArchives.Remove(save))service.EndMenu();
-            if (!disposed && AdvDialogueController.Active?.IsAdv==true && AdvSettingsTransition.Active==null &&
-                ((save!=null && (pages.ContainsKey(save) || advPages.ContainsKey(save))) || (view is EntryView && escapeMenus.ContainsKey((EntryView)view))))
+            if (!disposed && AdvSettingsTransition.Active==null && save!=null && advPages.ContainsKey(save))
                 AdvSettingsTransition.Play(AdvSettingsTransition.Capture(),false,sortingOrder:32500);
+            if(save!=null)requestedSaving.Remove(save);
             if(save!=null && advPages.TryGetValue(save,out var archivePage)){advPages.Remove(save);archivePage.Close();}
             if (save != null && pendingMenu) CancelPending();
             DialogueSavePage page;
@@ -564,7 +582,10 @@ namespace StudentAgeDialogueSave.UI
         {
             if(active==null)return;
             if(!active.loadingDefaults.TryGetValue(view,out bool original))active.loadingDefaults[view]=original=view.isShowLoading;
-            view.isShowLoading=AdvDialogueController.Active?.IsAdv==true && !active.originalArchives.Contains(view)?false:original;
+            view.isShowLoading=active.UseAdvArchive(view)?false:original;
+            if(!active.animationDefaults.ContainsKey(view))active.animationDefaults[view]=Tuple.Create(view.openAnimeType,view.closeAnimeType);
+            // ADV owns its transition; native archive entries open and close directly.
+            view.openAnimeType=AnimeType.None;view.closeAnimeType=AnimeType.None;
         }
 
         private static bool NativeTabSelected(UIToggleGroup __instance)
@@ -587,10 +608,17 @@ namespace StudentAgeDialogueSave.UI
             var entry=UIMgr.GetView<EntryView>(false) as EntryView;
             return Game.GetGameState()!=GameState.Running || (entry?.viewState==ViewState.Opened && !(bool)AccessTools.Field(typeof(EntryView),"isPause").GetValue(entry));
         }
+        private bool WantsAdvArchive => AdvDialogueController.Active!=null &&
+            ArchiveUiPolicy.UsesAdv(AdvDialogueController.Active.Preferences.ArchiveScope.Value,service.IsDialogueContext);
+        private bool UseAdvArchive(SaveView view) => !originalArchives.Contains(view) &&
+            (advPages.ContainsKey(view) || WantsAdvArchive);
+        internal static bool IsAdvArchive(SaveView view) => active!=null && active.advPages.ContainsKey(view);
+
         private static bool EntrySavePrefix()
         {
-            if(active==null || AdvDialogueController.Active?.IsAdv!=true)return true;
+            if(active==null)return true;
             if(IsTitleScreen())return false;
+            if (!active.service.IsDialogueContext) return true;
             active.Guard(()=>active.Open(true));return false;
         }
         internal static void OpenOriginalArchive(SaveView view)
@@ -600,15 +628,25 @@ namespace StudentAgeDialogueSave.UI
             // Scope the bypass to this open view. Closing it restores ADV routing.
             active.service.BeginMenu(false,out _);
             view.parms[0]=false;view.OnOpen();view.Refresh();
+            if(!active.pages.ContainsKey(view))active.pages.Add(view,new DialogueSavePage(view,active.service,active.log));
+            active.pages[view].PositionEntry();
         }
 
         private static void SaveOpened(SaveView __instance)
         {
             if (active != null) active.Guard(() => active.Attach(__instance));
         }
+        private static void SaveOpening(SaveView __instance)
+        {
+            if(active==null || __instance.parms==null || __instance.parms.Length==0)return;
+            active.requestedSaving[__instance]=(bool)__instance.parms[0];
+            if(active.service.IsDialogueContext)__instance.parms[0]=false;
+            ConfigureArchiveLoading(__instance);
+        }
+        private static bool NativeSavePrefix() => active==null || !active.service.IsDialogueContext;
         private static bool SaveRefreshPrefix(SaveView __instance)
         {
-            if(active==null || AdvDialogueController.Active?.IsAdv!=true || active.originalArchives.Contains(__instance))return true;
+            if(active==null || !active.UseAdvArchive(__instance))return true;
             if(__instance.isViewReady)active.Guard(()=>active.Attach(__instance));
             return !active.advPages.ContainsKey(__instance);
         }
@@ -678,6 +716,7 @@ namespace StudentAgeDialogueSave.UI
             foreach (var page in pages.Values.ToArray()) Guard(page.Dispose);
             pages.Clear();
             foreach(var pair in loadingDefaults)pair.Key.isShowLoading=pair.Value;loadingDefaults.Clear();
+            foreach(var pair in animationDefaults){pair.Key.openAnimeType=pair.Value.Item1;pair.Key.closeAnimeType=pair.Value.Item2;}animationDefaults.Clear();requestedSaving.Clear();
             foreach(var page in advPages.Values.ToArray())Guard(page.Close);advPages.Clear();
             foreach (var decoration in hotkeys.Values) Guard(decoration.Clear);
             hotkeys.Clear();

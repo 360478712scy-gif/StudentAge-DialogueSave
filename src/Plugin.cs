@@ -22,7 +22,7 @@ namespace StudentAgeDialogueSave
     public sealed class DialogueSavePlugin : BaseUnityPlugin
     {
         public const string Id = "local.studentage.dialoguesave";
-        public const string Version = "0.2.10";
+        public const string Version = "0.2.14";
         internal static DialogueRuntimeHost Host;
         void Awake()
         {
@@ -59,6 +59,8 @@ namespace StudentAgeDialogueSave
         readonly CancellationTokenSource shutdown = new CancellationTokenSource();
         ManualLogSource log;
         Harmony harmony;
+        readonly List<Harmony> fixes = new List<Harmony>();
+        bool comicInstalled;
         DialogueCheckpointAdapter adapter;
         DialogueSaveService service;
         DialogueUiController ui;
@@ -82,22 +84,46 @@ namespace StudentAgeDialogueSave
         internal void Initialize(ManualLogSource logger, bool auto, int interval, BepInEx.Configuration.ConfigEntry<string> uiMode)
         {
             log = logger; ownerThread = Thread.CurrentThread.ManagedThreadId;
-            harmony = new Harmony(DialogueSavePlugin.Id);
-            adapter = new DialogueCheckpointAdapter(NextFrame, Diagnose);
-            DialoguePresentationPolicy.Install(harmony);
-            adapter.Install(harmony);
-            service = new DialogueSaveService(adapter, Post, Diagnose, NextFrame, shutdown.Token, auto, interval);
-            ComicPresentationAdapter.Install(harmony);
-            NativeFightInputFix.Install(harmony);
-            NativeWindowModeFix.Install(harmony);
-            DialogueUiResourceLease.Install(harmony);
-            exitSave = new DialogueExitSave(service, NextFrame, Diagnose, harmony);
-            ui = new DialogueUiController(service, Diagnose);
-            ui.Install(harmony);
-            service.RecordsChanged += ui.RefreshRecords;
-            adv = new AdvDialogueController(adapter, ui, service, uiMode, shutdown.Token, Diagnose, harmony);
+            // Independent native fixes patch under their own Harmony IDs: a missing target
+            // removes only that group's patches and leaves the dialogue core running.
+            comicInstalled = InstallFix("comic", "漫画加载修复", ComicPresentationAdapter.Install);
+            InstallFix("fight-input", "格斗小游戏输入修复", NativeFightInputFix.Install);
+            InstallFix("window-mode", "窗口模式切换修复", NativeWindowModeFix.Install);
+            // The dialogue core (save adapter, storage, save pages, ADV) depends on each other
+            // and still installs or reverts as one unit.
+            try
+            {
+                harmony = new Harmony(DialogueSavePlugin.Id);
+                adapter = new DialogueCheckpointAdapter(NextFrame, Diagnose);
+                DialoguePresentationPolicy.Install(harmony);
+                adapter.Install(harmony);
+                service = new DialogueSaveService(adapter, Post, Diagnose, NextFrame, shutdown.Token, auto, interval);
+                DialogueUiResourceLease.Install(harmony);
+                exitSave = new DialogueExitSave(service, NextFrame, Diagnose, harmony);
+                ui = new DialogueUiController(service, Diagnose);
+                ui.Install(harmony);
+                service.RecordsChanged += ui.RefreshRecords;
+                adv = new AdvDialogueController(adapter, ui, service, uiMode, shutdown.Token, Diagnose, harmony);
+            }
+            catch (Exception ex)
+            {
+                log.LogError("对话存档与ADV界面未能初始化，已撤销这部分并保留原版：" + ex);
+                ShutdownCore();
+                return;
+            }
             StartCoroutine(WarmSettings());
             log.LogInfo("对话存档已初始化；实际可用范围由对话来源与稳定状态检查决定。");
+        }
+        bool InstallFix(string suffix, string name, Action<Harmony> install)
+        {
+            var fix = new Harmony(DialogueSavePlugin.Id + "." + suffix);
+            try { install(fix); fixes.Add(fix); return true; }
+            catch (Exception ex)
+            {
+                log.LogError(name + "未能启用，已撤销该项并保留原版：" + ex);
+                Cleanup(() => fix.UnpatchSelf());
+                return false;
+            }
         }
         System.Collections.IEnumerator WarmSettings()
         {
@@ -141,8 +167,8 @@ namespace StudentAgeDialogueSave
                 lock (dispatch) { if (dispatch.Count == 0) break; action = dispatch.Dequeue(); }
                 try { action(); } catch (Exception ex) { log?.LogError("对话存档异步回调失败：" + ex); }
             }
-            try { ComicPresentationAdapter.Tick(); adv?.Tick(); } catch (Exception ex) { log?.LogWarning("ADV界面更新失败：" + ex.Message); }
-            if (Time.realtimeSinceStartup < nextAutoCheck) return;
+            try { if (comicInstalled) ComicPresentationAdapter.Tick(); adv?.Tick(); } catch (Exception ex) { log?.LogWarning("ADV界面更新失败：" + ex.Message); }
+            if (service == null || Time.realtimeSinceStartup < nextAutoCheck) return;
             nextAutoCheck = Time.realtimeSinceStartup + 1f;
             try { service?.WarmListing(); } catch(Exception ex){log?.LogWarning("存档目录预读失败："+ex.Message);}
             try
@@ -163,21 +189,28 @@ namespace StudentAgeDialogueSave
             StopAllCoroutines();
             try
             {
-                Cleanup(() => exitSave?.Dispose());
-                Cleanup(() => ComicPresentationAdapter.Clear());
-                Cleanup(() => adv?.Dispose());
-                Cleanup(StudentAgeDialogueSave.UI.Letterbox.Release);
-                Cleanup(() => service?.Dispose());
-                Cleanup(() => ui?.Dispose());
-                Cleanup(() => adapter?.Dispose());
-                Cleanup(() => shutdown.Cancel());
-                Cleanup(() => harmony?.UnpatchSelf());
+                if (comicInstalled) Cleanup(() => ComicPresentationAdapter.Clear());
+                ShutdownCore();
+                foreach (var fix in fixes) Cleanup(() => fix.UnpatchSelf());
+                fixes.Clear();
             }
             finally
             {
                 lock (dispatch) dispatch.Clear();
                 if (DialogueSavePlugin.Host == this) DialogueSavePlugin.Host = null;
             }
+        }
+        void ShutdownCore()
+        {
+            Cleanup(() => exitSave?.Dispose());
+            Cleanup(() => adv?.Dispose());
+            Cleanup(StudentAgeDialogueSave.UI.Letterbox.Release);
+            Cleanup(() => service?.Dispose());
+            Cleanup(() => ui?.Dispose());
+            Cleanup(() => adapter?.Dispose());
+            Cleanup(() => shutdown.Cancel());
+            Cleanup(() => harmony?.UnpatchSelf());
+            exitSave = null; adv = null; service = null; ui = null; adapter = null; harmony = null;
         }
         void Cleanup(Action action) { try { action(); } catch (Exception ex) { log?.LogError("对话存档清理异常：" + ex); } }
     }

@@ -74,6 +74,7 @@ public sealed class DialogueQaDriver:MonoBehaviour
         ui=(DialogueUiController)AccessTools.Field(typeof(DialogueRuntimeHost),"ui").GetValue(host);
         service=(IDialogueUiService)AccessTools.Field(typeof(DialogueRuntimeHost),"service").GetValue(host);
         Check(adapter!=null&&ui!=null&&service!=null,"plugin initialized all components");
+        if(File.Exists(Path.Combine(root,"native-mode.txt"))) {yield return RuntimeNativeModeQA.Run(Check,Until,root);yield break;}
         if(File.Exists(Path.Combine(root,"preview-mode.txt")) && !File.Exists(Path.Combine(root,"controls-mode.txt")) && !File.Exists(Path.Combine(root,"font-mode.txt")) && !File.Exists(Path.Combine(root,"recovery-mode.txt")) && !File.Exists(Path.Combine(root,"adv-mode.txt")))
         {
             UIMgr.OpenView<SaveView>(UILayerType.None,null,new object[]{false});
@@ -169,6 +170,10 @@ public sealed class DialogueQaDriver:MonoBehaviour
         {var person=Cfg.PersonCfgMap.Values.Single(p=>p.name=="肖清雅");foreach(int id in new[]{1900000001,1900000002}){Cfg.TalkCfgMap[id].roleIds=new List<int>{person.id};Cfg.TalkCfgMap[id].roleName=null;}}
         evt.EnqueueEvt(0,1);evt.ShowNewRoundEvent();
         yield return Until(()=>adapter.IsSupportedDialogueContext,20,"native queued dialogue tracked");
+        if(File.Exists(Path.Combine(root,"long-history.txt"))) {yield return RuntimeLongHistoryQA.Run(adapter,Check,Until,root);yield break;}
+        if(File.Exists(Path.Combine(root,"escape.txt"))) {yield return RuntimeEscapeQA.Run(ui,Check,Until,root);yield break;}
+        if(File.Exists(Path.Combine(root,"october.txt"))) {yield return RuntimeOctoberQA.Run(adapter,Check,Until,root);yield break;}
+        if(File.Exists(Path.Combine(root,"scene-skip.txt"))) {yield return RuntimeSceneSkipQA.Run(adapter,Check,Until,root);yield break;}
         if(File.Exists(Path.Combine(root,"skip-probe.txt"))) {yield return RuntimeSkipProbeQA.Run(adapter,Check,Until,root);yield break;}
         if(File.Exists(Path.Combine(root,"phone.txt")))
         {

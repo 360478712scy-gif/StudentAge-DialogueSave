@@ -8,6 +8,8 @@
     <Compile Include="Program.cs" />
     <Compile Include="../../src/Game/HistoryTrailCodec.cs" />
     <Compile Include="../../src/Game/GameCheckpoint.cs" />
+    <Compile Include="../../src/Game/CheckpointHistoryLog.cs" />
+    <Compile Include="../../src/Game/HistoryWorldBuffer.cs" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 </Project>

@@ -20,6 +20,8 @@ using StudentAgeDialogueSave.GameIntegration;
 public static class RuntimeSisiQA
 {
     static string authorWorkshop;
+    static int greetingCompletions;
+    static void GreetingCompleted()=>greetingCompletions++;
     static bool WorkshopRoot(ref string __result){__result=authorWorkshop;return false;}
     public static void Prepare(string root)
     {
@@ -29,6 +31,82 @@ public static class RuntimeSisiQA
         new Harmony("dialogue.qa.sisi-resource-root").Patch(AccessTools.Method(type,"FindWorkshopDirectory"),prefix:new HarmonyMethod(typeof(RuntimeSisiQA),nameof(WorkshopRoot)));
     }
     static TalkCfg Current(NewTalkView t)=>t==null?null:(TalkCfg)AccessTools.Field(typeof(NewTalkView),"cfg").GetValue(t);
+    static bool ArchiveIdle()=>AdvSavePage.Active!=null && AdvSavePage.Active.GetComponent<CanvasGroup>().alpha==1 &&
+        AdvSettingsTransition.Active==null && !AdvConfirmation.IsOpen && !(bool)AccessTools.Field(typeof(AdvSavePage),"busy").GetValue(AdvSavePage.Active);
+    static IEnumerator ManualRoundtrip(DialogueCheckpointAdapter adapter,DialogueSaveService service,int talkId,
+        Action<bool,string> check,Func<Func<bool>,float,string,IEnumerator> until,string root)
+    {
+        foreach(string key in new[]{"SaveEmpty","Load"})ConfirmationOptions.Entry(AdvDialogueController.Active.Configuration,key).Value=true;
+        check(service.IsDialogueContext,"author Mod recognized as dialogue context "+talkId);
+        RuntimeUiQA.Click("ADV.保存",check);
+        yield return until(()=>ArchiveIdle()&&!service.IsListing,25,"author SAVE opens manual dialogue archive "+talkId);
+        check(!(bool)AccessTools.Property(typeof(AdvSavePage),"NativeSlots").GetValue(AdvSavePage.Active),"Mod SAVE uses dialogue snapshots, not native world-only saves "+talkId);
+        RuntimeUiQA.Click("Archive.PageNext",check);yield return null;
+        int page=(int)AccessTools.Field(typeof(AdvSavePage),"pageCount").GetValue(AdvSavePage.Active);
+        AccessTools.Method(typeof(AdvSavePage),"SetPage").Invoke(AdvSavePage.Active,new object[]{page});yield return null;
+        int slot=(page-1)*12+1;
+        RuntimeUiQA.Click("Archive.Slot"+slot,check);
+        yield return until(()=>AdvConfirmation.IsOpen&&AdvSettingsTransition.Active==null,10,"author manual save confirmation "+talkId);
+        RuntimeUiQA.Click("ADV.SaveEmptyConfirm",check);
+        yield return until(()=>ArchiveIdle()&&service.ArchiveList(DialogueUiCategory.Manual).Any(r=>r.Slot==slot&&r.RunId==service.ArchiveRun),40,"author manual slot persisted "+talkId);
+        var saved=service.ArchiveList(DialogueUiCategory.Manual).Single(r=>r.Slot==slot&&r.RunId==service.ArchiveRun);
+        check(saved.CanLoad,"authored manual save is readable "+talkId+": "+saved.StatusReason);
+        yield return new WaitForEndOfFrame();ScreenCapture.CaptureScreenshot(Path.Combine(root,"results/sisi-manual-saved-"+talkId+".png"));yield return null;
+        RuntimeUiQA.Click("Archive.Tab1",check);yield return until(ArchiveIdle,10,"author load tab ready");
+        AccessTools.Method(typeof(AdvSavePage),"SetPage").Invoke(AdvSavePage.Active,new object[]{page});yield return null;
+        RuntimeUiQA.Click("Archive.Slot"+slot,check);
+        yield return until(()=>AdvConfirmation.IsOpen&&AdvSettingsTransition.Active==null,10,"author manual load confirmation");
+        RuntimeUiQA.Click("ADV.LoadConfirm",check);
+        yield return until(()=>AdvSavePage.Active==null&&!adapter.IsRestoring&&adapter.CanCapture(out _),60,"author manual slot restored "+talkId);
+        check(Current(UIMgr.GetView<NewTalkView>(false) as NewTalkView)?.id==talkId,"manual UI roundtrip preserves authored dialogue node "+talkId);
+    }
+    static IEnumerator OriginalRoundtrip(DialogueCheckpointAdapter adapter,DialogueSaveService service,int talkId,
+        Action<bool,string> check,Func<Func<bool>,float,string,IEnumerator> until)
+    {
+        AdvDialogueController.Active.Preferences.ArchiveScope.Value=AdvArchiveScope.Disabled;
+        ConfirmationOptions.Entry(AdvDialogueController.Active.Configuration,"Load").Value=false;
+        var host=Resources.FindObjectsOfTypeAll<DialogueRuntimeHost>().First();
+        var ui=(DialogueUiController)AccessTools.Field(typeof(DialogueRuntimeHost),"ui").GetValue(host);
+        Func<DialogueSavePage> page=()=>((Dictionary<View.Main.SaveView,DialogueSavePage>)AccessTools.Field(typeof(DialogueUiController),"pages").GetValue(ui))[UIMgr.GetView<View.Main.SaveView>(false) as View.Main.SaveView];
+        Func<bool> ready=()=>UIMgr.IsViewOpened<View.Main.SaveView>() && !service.IsListing && AdvSettingsTransition.Active==null &&
+            !(UIMgr.GetView<View.Main.LoadingView>(false)?.gameObject.activeInHierarchy??false) &&
+            Resources.FindObjectsOfTypeAll<Transform>().Any(t=>t.name=="DialogueSave.Grid"&&t.gameObject.activeInHierarchy);
+        Action<int,string> select=(index,button)=>
+        {
+            var p=page();AccessTools.Field(typeof(DialogueSavePage),"page").SetValue(p,index/9+1);p.RefreshRecords();Canvas.ForceUpdateCanvases();
+            var card=Resources.FindObjectsOfTypeAll<Transform>().Single(t=>t.name=="DialogueSave.Card."+(index%9)&&t.gameObject.activeInHierarchy);
+            var b=card.GetComponentsInChildren<Button>(false).Single(x=>x.name==button);string old=b.name;b.name="QA.Sisi.OriginalSlot";
+            RuntimeUiQA.Click(b.name,check);if(b!=null)b.name=old;
+        };
+        Func<int,DialogueUiRecord> record=index=>
+        {
+            var item=((System.Collections.IList)AccessTools.Field(typeof(DialogueSavePage),"items").GetValue(page()))[index];
+            return (DialogueUiRecord)AccessTools.Field(item.GetType(),"Record").GetValue(item);
+        };
+        yield return until(()=>Resources.FindObjectsOfTypeAll<Button>().Any(b=>b.name=="ADV.保存"&&b.gameObject.activeInHierarchy),10,"ADV toolbar rebuilt after archive scope change");
+        // A just-created Canvas has not registered graphic depths until it renders.
+        yield return new WaitForEndOfFrame();yield return null;
+        yield return until(()=>AdvSettingsTransition.Active==null&&!AdvDialogueController.Active.ModalOpen,10,"previous ADV archive exit transition finished");
+        RuntimeUiQA.Click("ADV.保存",check);yield return until(ready,25,"original-style Mod dialogue save page opens");
+        check((bool)AccessTools.Field(typeof(DialogueSavePage),"saving").GetValue(page()),"original-style dialogue subpage retains requested save mode");
+        var before=service.ArchiveList(DialogueUiCategory.Manual).Select(r=>r.RevisionId).ToArray();
+        var items=(System.Collections.IList)AccessTools.Field(typeof(DialogueSavePage),"items").GetValue(page());
+        int empty=Enumerable.Range(0,items.Count).First(i=>record(i)==null);select(empty,"btn_add");
+        yield return until(()=>service.ArchiveList(DialogueUiCategory.Manual).Any(r=>!before.Contains(r.RevisionId)),40,"original-style new slot writes real Mod snapshot");
+        var saved=service.ArchiveList(DialogueUiCategory.Manual).First(r=>!before.Contains(r.RevisionId));
+        check(saved.CanLoad,"original-style Mod snapshot validates after writing");
+        UIMgr.CloseView<View.Main.SaveView>();yield return until(()=>!UIMgr.IsViewOpened<View.Main.SaveView>()&&adapter.CanCapture(out _),15,"original-style save pause released");
+        yield return until(()=>Resources.FindObjectsOfTypeAll<Button>().Any(b=>b.name=="ADV.读取"&&b.gameObject.activeInHierarchy),10,"ADV toolbar visible after original-style archive close");
+        yield return new WaitForEndOfFrame();yield return null;
+        yield return until(()=>AdvSettingsTransition.Active==null&&!AdvDialogueController.Active.ModalOpen,10,"original-style save exit has no remaining input guard");
+        RuntimeUiQA.Click("ADV.读取",check);yield return until(ready,25,"original-style Mod dialogue load page opens");
+        items=(System.Collections.IList)AccessTools.Field(typeof(DialogueSavePage),"items").GetValue(page());
+        int target=Enumerable.Range(0,items.Count).First(i=>record(i)?.RevisionId==saved.RevisionId);select(target,"btn_click");
+        RuntimeUiQA.Click("DialogueSave.Commit",check);
+        yield return until(()=>!UIMgr.IsViewOpened<View.Main.SaveView>()&&!adapter.IsRestoring&&adapter.CanCapture(out _),60,"original-style saved Mod dialogue restores through UI");
+        check(Current(UIMgr.GetView<NewTalkView>(false) as NewTalkView)?.id==talkId,"original-style UI restores the same authored greeting node");
+        AdvDialogueController.Active.Preferences.ArchiveScope.Value=AdvArchiveScope.DialogueOnly;
+    }
     public static void Validate(string root,Action<bool,string> check)
     {
         var infos=Chainloader.PluginInfos.Values.ToArray();
@@ -58,12 +136,78 @@ public static class RuntimeSisiQA
             yield return new WaitForSecondsRealtime(.5f);
         }
     }
+    static IEnumerator SourceEntries(DialogueCheckpointAdapter adapter,DialogueSaveService service,
+        Action<bool,string> check,Func<Func<bool>,float,string,IEnumerator> until,string root)
+    {
+        const int eventId=1277156;
+        int mapId=3,bg=Cfg.MapCfgMap[mapId].bg;
+        UIMgr.OpenView<View.Main.MapSceneView>(UILayerType.None,null,new object[]{mapId,bg});
+        yield return until(()=>UIMgr.IsViewOpened<View.Main.MapSceneView>(),25,"native scene opened for Sisi greeting");
+        yield return new WaitForSecondsRealtime(1);
+        var scene=UIMgr.GetView<View.Main.MapSceneView>(false) as View.Main.MapSceneView;
+        // Match the native pending-greeting UI state, then enter through its method.
+        scene.ShowCloseBtn(false);
+        AccessTools.Field(typeof(View.Main.MapSceneView),"enableCloseByRightClick").SetValue(scene,false);
+        greetingCompletions=0;
+        new Harmony("dialogue.qa.sisi.scene-greeting").Patch(AccessTools.Method(typeof(View.Main.MapSceneView),"<ShowGreetingEvt>b__47_0"),
+            prefix:new HarmonyMethod(typeof(RuntimeSisiQA),nameof(GreetingCompleted)));
+        AccessTools.Field(typeof(View.Main.MapSceneView),"greetingEvtId").SetValue(scene,eventId);
+        scene.ShowGreetingEvt();
+        yield return until(()=>UIMgr.IsViewOpened<NewTalkView>(),15,"Sisi greeting entered through native scene method");
+        yield return new WaitForSecondsRealtime(2);
+        var talk=UIMgr.GetView<NewTalkView>(false) as NewTalkView;
+        if(talk.talkState==TalkState.Anim)talk.OnClickNext();
+        yield return until(()=>talk.talkState==TalkState.AnimEnd,10,"native greeting text settled");
+        yield return new WaitForSecondsRealtime(2);
+        bool can=adapter.CanCapture(out string reason);
+        string callback=talk.callback?.Method.DeclaringType?.FullName+"."+talk.callback?.Method.Name;
+        File.WriteAllText(Path.Combine(root,"results/sisi-greeting-capture.txt"),"can="+can+" reason="+reason+" callback="+callback);
+        check(can,"native Sisi scene greeting saves: "+reason+" callback="+callback);
+        var continuation=DialogueContinuation.Capture(talk);
+        check(continuation["callback"].Value<string>("rule")=="site-greeting","greeting snapshot identifies the audited native continuation");
+        var wrongScene=(Newtonsoft.Json.Linq.JObject)continuation.DeepClone();
+        wrongScene["callback"]["fields"]["mapId"]=Cfg.MapCfgMap.Keys.First(id=>id!=mapId);
+        bool refused=false;try{DialogueContinuation.Validate(wrongScene);}catch(InvalidDataException){refused=true;}
+        check(refused,"greeting callback cannot bind to a different saved scene");
+        var wrongMethod=(Newtonsoft.Json.Linq.JObject)continuation.DeepClone();wrongMethod["callback"]["token"]=(int)wrongMethod["callback"]["token"]+1;
+        refused=false;try{DialogueContinuation.Validate(wrongMethod);}catch(InvalidDataException){refused=true;}
+        check(refused,"unknown greeting method token remains rejected");
+        refused=false;try{DialogueContinuation.CaptureCallback(GreetingCompleted);}catch(InvalidOperationException){refused=true;}
+        check(refused,"arbitrary third-party continuation is still refused");
+        var leave=(Newtonsoft.Json.Linq.JObject)continuation.DeepClone();leave["callback"]["rule"]="leave-site";
+        leave["callback"]["token"]=AccessTools.Method(typeof(BaseView),"CloseView").MetadataToken;
+        DialogueContinuation.Validate(leave);
+        check(Newtonsoft.Json.Linq.JToken.DeepEquals(leave["callback"],DialogueContinuation.CaptureCallback(DialogueContinuation.RestoreCallback(leave["callback"]))),"existing leave-site continuation still roundtrips without invoking it");
+        yield return ManualRoundtrip(adapter,service,Current(talk).id,check,until,root);
+        talk=UIMgr.GetView<NewTalkView>(false) as NewTalkView;
+        yield return OriginalRoundtrip(adapter,service,Current(talk).id,check,until);
+        talk=UIMgr.GetView<NewTalkView>(false) as NewTalkView;
+        scene=UIMgr.GetView<View.Main.MapSceneView>(false) as View.Main.MapSceneView;
+        check(ReferenceEquals(talk.callback.Target,scene),"loaded greeting callback binds to restored scene instance");
+        check(greetingCompletions==0,"save and load never replay greeting completion");
+        check(!(bool)AccessTools.Field(typeof(View.Main.MapSceneView),"enableCloseByRightClick").GetValue(scene),"restored pending greeting keeps scene close blocked");
+        for(int step=0;step<120 && UIMgr.IsViewOpened<NewTalkView>();step++)
+        {
+            talk=UIMgr.GetView<NewTalkView>(false) as NewTalkView;
+            yield return until(()=>adapter.CanAdvancePresentation(talk),10,"restored greeting presentation released");
+            if(talk.talkState==TalkState.Option)RuntimeUiQA.Click("ADV.Choice.0",check);
+            else talk.OnClickNext();
+            yield return new WaitForSecondsRealtime(.15f);
+        }
+        check(!UIMgr.IsViewOpened<NewTalkView>()&&greetingCompletions==1,"authored Sisi greeting ends and native completion executes exactly once");
+        check(UIMgr.IsViewOpened<View.Main.MapSceneView>() && (bool)AccessTools.Field(typeof(View.Main.MapSceneView),"enableCloseByRightClick").GetValue(scene),"greeting returns to usable original scene after loading");
+        yield return new WaitForEndOfFrame();ScreenCapture.CaptureScreenshot(Path.Combine(root,"results/sisi-greeting-returned-scene.png"));yield return null;
+    }
     public static IEnumerator Run(DialogueCheckpointAdapter adapter,Action<bool,string> check,Func<Func<bool>,float,string,IEnumerator> until,string root)
     {
         AdvDialogueController.Active.SelectMode("ADV");
+        // Previous settings QA deliberately persists Disabled; this suite exercises
+        // the default archive route and must establish its own isolated preference.
+        AdvDialogueController.Active.Preferences.ArchiveScope.Value=AdvArchiveScope.DialogueOnly;
         var host=Resources.FindObjectsOfTypeAll<DialogueRuntimeHost>().First();
         var service=(DialogueSaveService)AccessTools.Field(typeof(DialogueRuntimeHost),"service").GetValue(host);
         var confirmation=ConfirmationOptions.Entry(AdvDialogueController.Active.Configuration,"QuickSave");confirmation.Value=false;
+        if(File.Exists(Path.Combine(root,"sisi-source-entries.txt"))){yield return SourceEntries(adapter,service,check,until,root);yield break;}
         var roundtrips=new HashSet<int>{1277069001,1277069074,1277069096};
         // Enter the author's event through native ShowEvent; fixture bypasses calendar/friendship prerequisites only.
         var targets=new HashSet<int>{1277067008,1277067063,1277069009,1277069031,1277069074,1277069096,1277069110};
@@ -108,6 +252,8 @@ public static class RuntimeSisiQA
                 if(talk.talkState==TalkState.AnimEnd && roundtrips.Remove(cfg.id))
                 {
                     yield return until(()=>adapter.CanCapture(out _),10,"authored Mod line saveable "+cfg.id);
+                    yield return ManualRoundtrip(adapter,service,cfg.id,check,until,root);
+                    talk=UIMgr.GetView<NewTalkView>(false) as NewTalkView;
                     if(cfg.id==1277069001)
                     {
                         var audio=(Newtonsoft.Json.Linq.JObject)adapter.Capture().Dialogue["audio"];

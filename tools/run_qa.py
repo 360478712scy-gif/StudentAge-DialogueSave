@@ -7,9 +7,24 @@ assert (QA/'isolation-verified.txt').exists()
 assert (QA/'StudentAge_Data/app.info').read_text()=='DlgSaveQA\nDialogSave'
 processes=subprocess.check_output(['ps','-axo','pid,command'],text=True)
 if any('StudentAge.exe' in x and 'winewrapper' not in x and 'exec_command' not in x and 'rg ' not in x for x in processes.splitlines()):raise SystemExit('Another game process is running')
+long_history=QA/'long-history.txt'
+if '--long-history' in sys.argv:long_history.write_text('Long-session capture and memory')
+else:long_history.unlink(missing_ok=True)
+native_mode=QA/'native-mode.txt'
+if '--native-mode' in sys.argv:native_mode.write_text('Persisted Original settings style return')
+else:native_mode.unlink(missing_ok=True)
+escape=QA/'escape.txt'
+if '--escape' in sys.argv:escape.write_text('Escape close all mod surfaces')
+else:escape.unlink(missing_ok=True)
+october=QA/'october.txt'
+if '--october' in sys.argv:october.write_text('October regression suite')
+else:october.unlink(missing_ok=True)
 skip_probe=QA/'skip-probe.txt'
 if '--skip-probe' in sys.argv:skip_probe.write_text('Grade rank event skip probe')
 else:skip_probe.unlink(missing_ok=True)
+scene_skip=QA/'scene-skip.txt'
+if '--scene-skip' in sys.argv:scene_skip.write_text('Prepublish scene skip boundary matrix')
+else:scene_skip.unlink(missing_ok=True)
 phone_flag=QA/'phone.txt'
 if '--phone' in sys.argv:phone_flag.write_text('Phone call skip and fast-forward')
 else:phone_flag.unlink(missing_ok=True)
@@ -40,6 +55,9 @@ else:resume_sisi.unlink(missing_ok=True)
 sisi=QA/'sisi-up-mode.txt'
 if '--sisi-up' in sys.argv:sisi.write_text('Real installed Sisi story with UP')
 else:sisi.unlink(missing_ok=True)
+sisi_sources=QA/'sisi-source-entries.txt'
+if '--sisi-source-entries' in sys.argv:sisi_sources.write_text('Native scene greeting and dialogue archive entry routes')
+else:sisi_sources.unlink(missing_ok=True)
 perf_sweep=QA/'perf-sweep.txt'
 final_batch=QA/'final-batch.txt'
 if '--final-batch' in sys.argv:final_batch.write_text('Consolidated final checks')
@@ -151,6 +169,8 @@ else:adv_flag.unlink(missing_ok=True)
 import re
 cfg=QA/'BepInEx/config/local.studentage.dialoguesave.cfg'
 contents=cfg.read_text() if cfg.exists() else '[Saving]\nAutoSave = false\n'
+if '--october' in sys.argv:
+    contents=re.sub(r'^AutoSave\s*=.*$', 'AutoSave = false',contents,flags=re.M)
 mode='ADV' if adv_only else 'Ask' if adv else 'Original'
 if '--mod-sweep' in sys.argv or '--choice-click' in sys.argv or '--storage-perf' in sys.argv or '--layout' in sys.argv or '--native-slots' in sys.argv or '--effects' in sys.argv or '--phone' in sys.argv or '--skip-probe' in sys.argv:mode='ADV'
 if re.search(r'^DialogueStyle\s*=.*$',contents,re.M):contents=re.sub(r'^DialogueStyle\s*=.*$', 'DialogueStyle = '+mode,contents,flags=re.M)
